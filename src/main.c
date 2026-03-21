@@ -35,7 +35,7 @@ extern ptrdiff_t g_xbox_mem_offset;
 
 /* ── XBE Constants (TODO: update after Phase 1 XBE analysis) ── */
 
-#define DASHBOARD_ENTRY_POINT   0x00000000  /* placeholder */
+#define DASHBOARD_ENTRY_POINT   0x00052A81
 #define DASHBOARD_XBE_PATH      "game\\xboxdash.xbe"
 #define DASHBOARD_GAME_DIR      "game"
 
