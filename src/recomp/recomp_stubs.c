@@ -1,8 +1,3 @@
-/**
- * Xbox Dashboard - Stub functions for unresolved externals
- * 3152 functions that the lifter could not translate.
- */
-
 #include <stdint.h>
 extern uint32_t g_eax;
 
