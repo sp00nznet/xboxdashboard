@@ -1,0 +1,42 @@
+# Game files (not redistributable - extract from Xbox HDD image)
+game/
+extracted/
+
+# Build artifacts
+build/
+bin/
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+
+# Generated recompiled code (regenerable via pipeline)
+src/recomp/gen/
+
+# Tool output (regenerable)
+tools/disasm/output/asm/
+tools/disasm/output/*.json
+tools/func_id/output/
+tools/recomp/output/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Archives
+*.7z
+*.iso
+*.qcow2
+*.raw
