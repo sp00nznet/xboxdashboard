@@ -25,15 +25,106 @@ typedef void (*recomp_func_t)(void);
 extern void sub_0004F8B5(void);
 extern uint32_t g_ecx, g_edx, g_ebx, g_esi, g_edi, g_esp;
 
-/* Hook for sub_0004F6BE to trace CRT thread init flow */
-extern void sub_0004F6BE(void);
-static int s_f6be_count = 0;
-static void traced_sub_0004F6BE(void)
+/* Traced dashboard main (sub_00052A12) to find hang point */
+extern void sub_000558D0(void);
+extern void sub_00055A37(void);
+extern void sub_000559DF(void);
+extern void sub_0002A4FD(void);
+extern void sub_0005586B(void);
+extern void sub_0004F85A(void);
+extern void sub_0002A4D4(void);
+extern void sub_0002A40F(void);
+extern void sub_00029777(void);
+extern void sub_0002A4ED(void);
+
+static void traced_dashboard_main(void)
 {
-    uint32_t arg = *(uint32_t *)((uint8_t *)g_xbox_mem_offset + g_esp + 4);
-    fprintf(stderr, "[TRACE] sub_0004F6BE called (count=%d, arg=0x%08X)\n", ++s_f6be_count, arg);
-    fflush(stderr);
-    sub_0004F6BE();
+    fprintf(stderr, "[DASH] Dashboard main entered\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH] Calling sub_000558D0 (D3D/system init)...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_000558D0();
+    fprintf(stderr, "[DASH] sub_000558D0 returned (eax=0x%08X)\n", g_eax); fflush(stderr);
+
+    /* Check fs:[0x20] for D3D cache - we set KPCR[0x20] to 0 */
+    g_eax = MEM32(0x20);
+    g_eax = MEM32(g_eax + 0x250);
+    /* ecx = 0 since KPCR[0x20] is 0 */
+
+    fprintf(stderr, "[DASH] Calling sub_00055A37...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_00055A37();
+    fprintf(stderr, "[DASH] sub_00055A37 returned\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH] Calling sub_000559DF...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_000559DF();
+    fprintf(stderr, "[DASH] sub_000559DF returned\n"); fflush(stderr);
+
+    /* Inline traced version of the full init chain */
+    fprintf(stderr, "[DASH] Starting xapp init (sub_0002A40F)...\n"); fflush(stderr);
+
+    /* sub_0002A4FD: call sub_0004F85A, then sub_0002A4D4 */
+    fprintf(stderr, "[DASH]  [1] sub_0004F85A(0x33582)...\n"); fflush(stderr);
+    PUSH32(g_esp, 0x33582);
+    PUSH32(g_esp, 0); sub_0004F85A();
+    fprintf(stderr, "[DASH]  [1] done\n"); fflush(stderr);
+
+    /* sub_0002A40F init chain */
+    uint32_t saved_ebp, saved_esp;
+    PUSH32(g_esp, g_seh_ebp);
+    saved_ebp = g_seh_ebp;
+    saved_esp = g_esp;
+    g_esp -= 0x208;
+    PUSH32(g_esp, g_esi);
+    g_esi = 0x121EF0; /* ecx = this */
+
+    extern void sub_000345FA(void);
+    extern void sub_0002A50F(void);
+    extern void sub_0004FB15(void);
+    extern void sub_00055C01(void);
+    extern void sub_00032978(void);
+    extern void sub_00029D34(void);
+
+    fprintf(stderr, "[DASH]  [2] sub_000345FA...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_000345FA();
+    fprintf(stderr, "[DASH]  [2] done\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH]  [3] sub_0002A50F...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_0002A50F();
+    fprintf(stderr, "[DASH]  [3] done\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH]  [4] sub_0004FB15...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_0004FB15();
+    fprintf(stderr, "[DASH]  [4] done (eax=0x%08X)\n", g_eax); fflush(stderr);
+
+    fprintf(stderr, "[DASH]  [5] sub_00055C01...\n"); fflush(stderr);
+    PUSH32(g_esp, g_eax);
+    PUSH32(g_esp, 0); sub_00055C01();
+    POP32(g_esp, g_ecx);
+    fprintf(stderr, "[DASH]  [5] done\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH]  [6] sub_00032978...\n"); fflush(stderr);
+    PUSH32(g_esp, 0); sub_00032978();
+    fprintf(stderr, "[DASH]  [6] done\n"); fflush(stderr);
+
+    fprintf(stderr, "[DASH]  [7] sub_00029D34 (this=0x%08X)...\n", g_esi); fflush(stderr);
+    g_ecx = g_esi;
+    PUSH32(g_esp, 0); sub_00029D34();
+    fprintf(stderr, "[DASH]  [7] done (eax=0x%08X) - %s\n", g_eax,
+            (g_eax & 0xFF) ? "SUCCESS" : "FAILED"); fflush(stderr);
+
+    /* Return result */
+    POP32(g_esp, g_esi);
+    g_esp = saved_esp;
+    POP32(g_esp, g_seh_ebp);
+    /* eax already set by sub_00029D34 */
+    g_esp += 4; /* ret from sub_0002A4FD */
+
+    PUSH32(g_esp, 0);
+    PUSH32(g_esp, 1);
+    PUSH32(g_esp, 1);
+    PUSH32(g_esp, 0); sub_0005586B();
+
+    g_eax = 0;
+    g_esp += 8; /* ret 4 */
 }
 
 extern uint32_t g_seh_ebp;
@@ -219,6 +310,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x0004F8B5) return fixed_sub_0004F8B5;
     /* Fixed __SEH_prolog that writes back to g_seh_ebp */
     if (xbox_va == 0x000579F8) return fixed_seh_prolog;
+    /* Trace the dashboard main and init chain */
+    if (xbox_va == 0x00052A12) return traced_dashboard_main;
+    /* sub_0002A4FD is called directly from traced_dashboard_main, not via ICALL */
 
     (void)xbox_va;
     return (recomp_func_t)0;
