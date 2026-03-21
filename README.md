@@ -14,8 +14,8 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 |-------|-------------|--------|
 | 0 | Project setup & XBE extraction | DONE |
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,209 functions, 134 kernel imports |
-| 2 | Lift to C & first build | DONE - 248K lines of C, boots to CRT init |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | In progress |
+| 2 | Lift to C & first build | DONE - 248K lines of C, 3MB native exe |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | IN PROGRESS - app main executing! |
 | 4 | UI rendering (D3D8 init, 3D orb, fonts) | Pending |
 | 5 | Polish (input, audio, settings) | Pending |
 
@@ -72,13 +72,22 @@ game/
 Loading XBE... 1,394,036 bytes
 Initializing Xbox memory layout... 19 sections mapped, 27/28 RAM mirrors
 Initializing kernel bridge... 134/134 resolved (61 bridged, 73 stubbed)
-Entry point: 0x00052A81
 Starting dashboard...
-  PsCreateSystemThreadEx: routine=0x0004F8B5 (CRT thread init)
-  -> Crashes at fs:[0x28] TIB access (next to fix: FS segment emulation)
+  PsCreateSystemThreadEx -> CRT _threadstart -> SEH prolog -> TLS copy
+  _initterm (CRT initializers) -> OK
+  App entry (sub_00052A12) -> CALLED!
+  KeInitializeDpc, KeInitializeTimerEx, ExQueryPoolBlockSize,
+  NtQueryVirtualMemory (needs bridge), KeQuerySystemTime
+  -> Hangs after 8 kernel calls (spinning on unimplemented stub)
 ```
 
-The dashboard boots, creates its main thread, and gets into CRT initialization before hitting the TIB/TLS access pattern. Next up: FS segment handling and path translation.
+The dashboard's real initialization code is executing natively on Windows! It successfully:
+- Creates its main thread via PsCreateSystemThreadEx
+- Runs the CRT thread initialization (TLS copy, _initterm)
+- Enters the actual dashboard `main()` at 0x00052A12
+- Makes 8 kernel calls for timer setup, memory queries, and system time
+
+Next: implement missing kernel bridges (NtQueryVirtualMemory) and debug the init loop.
 
 ## Building
 
