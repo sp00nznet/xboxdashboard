@@ -1,13 +1,9 @@
 /**
  * Xbox Dashboard - Stub functions for unresolved externals
- *
  * 3152 functions that the lifter could not translate.
- * These are mostly in library sections (DOLBY, XIPS, language tables)
- * or small helper functions the disassembler missed.
  */
 
 #include <stdint.h>
-
 extern uint32_t g_eax;
 
 void sub_000291D2(void) { g_eax = 0; }
