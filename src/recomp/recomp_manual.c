@@ -89,25 +89,135 @@ static void fixed_seh_prolog(void)
     g_esp += 4;
 }
 
-static void traced_sub_0004F8B5(void)
+/**
+ * Hand-translated CRT _threadstart (sub_0004F8B5).
+ *
+ * This is the CRT thread initialization routine. The key difference from
+ * the auto-generated version is that we re-read g_seh_ebp after calling
+ * the SEH prolog, because the prolog sets up the caller's frame pointer.
+ *
+ * Original x86 flow:
+ * 1. Call __SEH_prolog with local size 0x18 and handler at 0x1CA88
+ * 2. Copy TLS data from template to thread-local storage
+ * 3. Call _initterm (0x4F6BE) to run CRT initializers
+ * 4. ICALL to [ebp+8] - the real app entry point (ctx1 from PsCreateSystemThreadEx)
+ * 5. Call _initterm again for CRT terminators
+ * 6. ICALL to [0x12068] - PsTerminateSystemThread with exit code
+ */
+extern void sub_000579F8(void);
+extern void sub_0004F6BE(void);
+extern recomp_func_t recomp_lookup(uint32_t xbox_va);
+extern recomp_func_t recomp_lookup_kernel(uint32_t xbox_va);
+
+static void fixed_sub_0004F8B5(void)
 {
-    fprintf(stderr, "[TRACE] sub_0004F8B5 entered, esp=0x%08X seh_ebp=0x%08X\n", g_esp, g_seh_ebp);
-    fprintf(stderr, "  Stack: [esp]=0x%08X [esp+4]=0x%08X [esp+8]=0x%08X [esp+C]=0x%08X\n",
-            *(uint32_t *)((uint8_t *)g_xbox_mem_offset + g_esp),
-            *(uint32_t *)((uint8_t *)g_xbox_mem_offset + g_esp + 4),
-            *(uint32_t *)((uint8_t *)g_xbox_mem_offset + g_esp + 8),
-            *(uint32_t *)((uint8_t *)g_xbox_mem_offset + g_esp + 12));
+    /* Use ebp as a macro that always reads g_seh_ebp */
+    #define EBP g_seh_ebp
+
+    fprintf(stderr, "[CRT] _threadstart entered, esp=0x%08X\n", g_esp);
     fflush(stderr);
-    sub_0004F8B5();
-    fprintf(stderr, "[TRACE] sub_0004F8B5 returned, eax=0x%08X esp=0x%08X\n", g_eax, g_esp);
+
+    /* call __SEH_prolog(0x18, 0x1CA88) */
+    PUSH32(g_esp, 0x18);
+    PUSH32(g_esp, 0x1CA88);
+    PUSH32(g_esp, 0);
+    fixed_seh_prolog(); /* This updates g_seh_ebp */
+
+    fprintf(stderr, "[CRT] After SEH prolog, ebp=0x%08X esp=0x%08X\n", EBP, g_esp);
+    fprintf(stderr, "[CRT]   [ebp+8]=0x%08X (app entry) [ebp+C]=0x%08X (ctx2)\n",
+            MEM32(EBP + 8), MEM32(EBP + 0xC));
     fflush(stderr);
+
+    /* [ebp-4] = 0 (set trylevel) */
+    MEM32(EBP - 4) = 0;
+
+    /* TLS setup: read TIB, copy TLS template data */
+    g_eax = MEM32(0x28); /* fs:[0x28] = TLS pointer */
+    MEM32(EBP - 28) = g_eax;
+    g_edx = MEM32(g_eax + 0x28);
+    g_edx = g_edx + 4;
+    MEM32(EBP - 32) = g_edx;
+    MEM32(g_edx - 4) = g_edx;
+
+    /* Copy TLS template */
+    g_ebx = MEM32(0x1CD58);
+    g_esi = MEM32(0x1CD54);
+    g_ebx = g_ebx - g_esi;
+    MEM32(EBP - 36) = g_ebx;
+
+    uint32_t copy_size = g_ebx;
+    uint32_t dst = g_edx;
+    uint32_t src = g_esi;
+
+    if (copy_size > 0) {
+        memcpy((void *)XBOX_PTR(dst), (void *)XBOX_PTR(src), copy_size);
+    }
+
+    /* Zero-fill BSS portion of TLS */
+    g_ecx = MEM32(0x1CD64);
+    if (g_ecx > 0) {
+        memset((void *)XBOX_PTR(g_ebx + g_edx), 0, g_ecx);
+    }
+
+    /* Call _initterm (CRT initializers) */
+    fprintf(stderr, "[CRT] Calling _initterm (initializers)\n");
+    fflush(stderr);
+    PUSH32(g_esp, 1);
+    PUSH32(g_esp, 0);
+    sub_0004F6BE();
+
+    /* ICALL to app entry point at [ebp+8] */
+    uint32_t app_entry = MEM32(EBP + 8);
+    uint32_t app_ctx = MEM32(EBP + 0xC);
+    fprintf(stderr, "[CRT] Calling app entry at 0x%08X with ctx=0x%08X\n", app_entry, app_ctx);
+    fflush(stderr);
+
+    {
+        recomp_func_t fn = recomp_lookup_manual(app_entry);
+        if (!fn) fn = recomp_lookup(app_entry);
+        if (!fn) fn = recomp_lookup_kernel(app_entry);
+        if (fn) {
+            PUSH32(g_esp, app_ctx);
+            PUSH32(g_esp, 0); /* dummy return address */
+            fn();
+        } else {
+            fprintf(stderr, "[CRT] ERROR: app entry 0x%08X not found in dispatch!\n", app_entry);
+            fflush(stderr);
+        }
+    }
+
+    MEM32(EBP - 40) = g_eax; /* save app return code */
+
+    /* Call _initterm (CRT terminators) */
+    PUSH32(g_esp, 0);
+    PUSH32(g_esp, 0);
+    sub_0004F6BE();
+
+    /* Call PsTerminateSystemThread via kernel thunk */
+    uint32_t terminate_va = MEM32(0x12068);
+    fprintf(stderr, "[CRT] Calling PsTerminateSystemThread (va=0x%08X, code=0x%08X)\n",
+            terminate_va, MEM32(EBP - 40));
+    fflush(stderr);
+
+    {
+        recomp_func_t fn = recomp_lookup_manual(terminate_va);
+        if (!fn) fn = recomp_lookup(terminate_va);
+        if (!fn) fn = recomp_lookup_kernel(terminate_va);
+        if (fn) {
+            PUSH32(g_esp, MEM32(EBP - 40));
+            PUSH32(g_esp, 0);
+            fn();
+        }
+    }
+
+    #undef EBP
 }
 
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
-    /* Trace the thread start routine and dashboard main during bring-up */
-    if (xbox_va == 0x0004F8B5) return traced_sub_0004F8B5;
-    if (xbox_va == 0x0004F6BE) return traced_sub_0004F6BE;
+    /* Fixed CRT _threadstart with proper g_seh_ebp handling */
+    if (xbox_va == 0x0004F8B5) return fixed_sub_0004F8B5;
+    /* Fixed __SEH_prolog that writes back to g_seh_ebp */
     if (xbox_va == 0x000579F8) return fixed_seh_prolog;
 
     (void)xbox_va;
