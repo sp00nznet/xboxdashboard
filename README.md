@@ -61,33 +61,36 @@ game/
 | Sections | 19 (.text 637KB, D3D, D3DX, XGRPH, DSOUND, WMA, XPP, DOLBY, XIPS, 6 language tables) |
 | Kernel Imports | 134 (32 Nt* file I/O, 25 Ke* threading, 14 Mm* memory, 7 Hal* hardware) |
 | Libraries | D3D8, D3DX8, XGRAPHC, DSOUND, LIBC, LIBCPMT (all XDK 3944) |
-| Functions | 3,209 discovered, 3,169 translated to C (98.8% success) |
-| Generated Code | 248,140 lines of C across 4 source files |
-| Executable | 3 MB native x86-64 Windows .exe |
+| Functions | 6,323 discovered, 6,258 translated to C (98.97% success) |
+| Generated Code | 628,227 lines of C across 7 source files |
+| Executable | ~6 MB native x86-64 Windows .exe |
 
 ### Current Boot Status
 
 ```
 === Xbox Dashboard - Static Recompilation ===
 Loading XBE... 1,394,036 bytes
-Initializing Xbox memory layout... 19 sections mapped, 27/28 RAM mirrors
+Initializing Xbox memory layout... 19 sections, 27/28 RAM mirrors
 Initializing kernel bridge... 134/134 resolved (61 bridged, 73 stubbed)
 Starting dashboard...
   PsCreateSystemThreadEx -> CRT _threadstart -> SEH prolog -> TLS copy
   _initterm (CRT initializers) -> OK
-  App entry (sub_00052A12) -> CALLED!
-  KeInitializeDpc, KeInitializeTimerEx, ExQueryPoolBlockSize,
-  NtQueryVirtualMemory (needs bridge), KeQuerySystemTime
-  -> Hangs after 8 kernel calls (spinning on unimplemented stub)
+  App entry (sub_00052A12) -> Dashboard main ENTERED!
+  sub_000558D0 (D3D/system init):
+    KeInitializeDpc -> KeInitializeTimerEx -> KeSetTimer(DPC)
+    NtAllocateVirtualMemory (x2) -> RtlInitializeCriticalSection
+    HalRequestSoftwareInterrupt -> DPC dispatched and completed!
+  -> Hangs deeper in D3D/display init (sub_00053DCE)
 ```
 
-The dashboard's real initialization code is executing natively on Windows! It successfully:
-- Creates its main thread via PsCreateSystemThreadEx
-- Runs the CRT thread initialization (TLS copy, _initterm)
-- Enters the actual dashboard `main()` at 0x00052A12
-- Makes 8 kernel calls for timer setup, memory queries, and system time
+The dashboard's real initialization code is executing natively on Windows:
+- CRT thread init with proper TLS copy and SEH frame setup
+- Dashboard `main()` at 0x00052A12 called successfully
+- DPC/timer system working (shutdown watchdog timer dispatches and completes)
+- Memory allocation, critical sections, and kernel timing all functional
+- 12+ kernel calls executing correctly
 
-Next: implement missing kernel bridges (NtQueryVirtualMemory) and debug the init loop.
+Current blocker: hang in D3D/display initialization after the DPC system is set up. Need to trace deeper into the rendering init path.
 
 ## Building
 
