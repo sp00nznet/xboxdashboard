@@ -13,9 +13,9 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Project setup & XBE extraction | DONE |
-| 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,209 functions, 134 kernel imports |
-| 2 | Lift to C & first build | DONE - 248K lines of C, 3MB native exe |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | IN PROGRESS - app main executing! |
+| 1 | XBE analysis (parse, disasm, func_id) | DONE - 6,323 functions, 134 kernel imports |
+| 2 | Lift to C & first build | DONE - 628K lines of C, ~6MB native exe |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | IN PROGRESS - 12+ kernel calls, DPC working |
 | 4 | UI rendering (D3D8 init, 3D orb, fonts) | Pending |
 | 5 | Polish (input, audio, settings) | Pending |
 
@@ -124,6 +124,15 @@ bin/Release/xboxdash.exe
 ```
 
 The executable expects the original dashboard files in the `game/` subdirectory.
+
+### Key Milestones So Far
+
+- **FATX extraction** - Wrote custom QCOW2 + FATX filesystem tools to pull dashboard from Xbox HDD image
+- **XBE analysis** - 19 sections, 134 kernel imports, internal codename "xapp" (Xbox Application)
+- **Function recovery** - Recovered 3,087 "split-tail" functions the disassembler missed by scanning for stubbed call targets
+- **CRT thread init** - Hand-translated `_threadstart` to fix `g_seh_ebp` frame pointer sharing between SEH prolog and caller
+- **DPC dispatch** - Implemented `HalRequestSoftwareInterrupt` with deferred procedure call queue, shutdown watchdog timer runs
+- **SEH prolog fix** - Post-processed 48 generated call sites to re-read `ebp` from `g_seh_ebp` after `__SEH_prolog` returns
 
 ## How It Works
 
