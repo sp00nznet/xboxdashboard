@@ -8,11 +8,11 @@
 #include <stdio.h>
 #include <stdint.h>
 
-/* ── ICALL trace ring buffer ───────────────────────────────── */
+/* ── ICALL trace ring buffer (defined in xbox_memory_layout.c) ── */
 
-volatile uint32_t g_icall_trace[16]  = {0};
-volatile uint32_t g_icall_trace_idx  = 0;
-volatile uint64_t g_icall_count      = 0;
+extern volatile uint32_t g_icall_trace[16];
+extern volatile uint32_t g_icall_trace_idx;
+extern volatile uint64_t g_icall_count;
 
 typedef void (*recomp_func_t)(void);
 
