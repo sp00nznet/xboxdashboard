@@ -13,9 +13,9 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Project setup & XBE extraction | DONE |
-| 1 | XBE analysis (parse, disasm, func_id) | Up next |
-| 2 | Lift to C & first build | Pending |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | Pending |
+| 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,209 functions, 134 kernel imports |
+| 2 | Lift to C & first build | DONE - 248K lines of C, boots to CRT init |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | In progress |
 | 4 | UI rendering (D3D8 init, 3D orb, fonts) | Pending |
 | 5 | Polish (input, audio, settings) | Pending |
 
@@ -48,7 +48,37 @@ game/
 
 ## XBE Analysis
 
-*Coming in Phase 1 - entry point, section map, kernel imports, function count*
+| Property | Value |
+|----------|-------|
+| Title | Xbox Dashboard |
+| Title ID | 0xFFFE0000 (system application) |
+| Build | 3944 (v1.0) |
+| Build Date | 2001-10-25 |
+| Internal Name | "xapp" (Xbox Application) |
+| Debug Path | `d:\xboxret\private\ui\xapp\obj\i386\xboxdash.exe` |
+| Entry Point | 0x00052A81 |
+| Image Size | 1.38 MB |
+| Sections | 19 (.text 637KB, D3D, D3DX, XGRPH, DSOUND, WMA, XPP, DOLBY, XIPS, 6 language tables) |
+| Kernel Imports | 134 (32 Nt* file I/O, 25 Ke* threading, 14 Mm* memory, 7 Hal* hardware) |
+| Libraries | D3D8, D3DX8, XGRAPHC, DSOUND, LIBC, LIBCPMT (all XDK 3944) |
+| Functions | 3,209 discovered, 3,169 translated to C (98.8% success) |
+| Generated Code | 248,140 lines of C across 4 source files |
+| Executable | 3 MB native x86-64 Windows .exe |
+
+### Current Boot Status
+
+```
+=== Xbox Dashboard - Static Recompilation ===
+Loading XBE... 1,394,036 bytes
+Initializing Xbox memory layout... 19 sections mapped, 27/28 RAM mirrors
+Initializing kernel bridge... 134/134 resolved (61 bridged, 73 stubbed)
+Entry point: 0x00052A81
+Starting dashboard...
+  PsCreateSystemThreadEx: routine=0x0004F8B5 (CRT thread init)
+  -> Crashes at fs:[0x28] TIB access (next to fix: FS segment emulation)
+```
+
+The dashboard boots, creates its main thread, and gets into CRT initialization before hitting the TIB/TLS access pattern. Next up: FS segment handling and path translation.
 
 ## Building
 
