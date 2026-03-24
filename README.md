@@ -15,8 +15,8 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | 0 | Project setup & XBE extraction | DONE |
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 6,323 functions, 134 kernel imports |
 | 2 | Lift to C & first build | DONE - 628K lines of C, ~6MB native exe |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | IN PROGRESS - 12+ kernel calls, DPC working |
-| 4 | UI rendering (D3D8 init, 3D orb, fonts) | Pending |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - 44+ kernel calls, full init chain |
+| 4 | UI rendering (D3D8 init, 3D orb, fonts) | IN PROGRESS - NV2A device created, D3D8 next |
 | 5 | Polish (input, audio, settings) | Pending |
 
 ## What's Inside the Dashboard
@@ -71,26 +71,38 @@ game/
 === Xbox Dashboard - Static Recompilation ===
 Loading XBE... 1,394,036 bytes
 Initializing Xbox memory layout... 19 sections, 27/28 RAM mirrors
-Initializing kernel bridge... 134/134 resolved (61 bridged, 73 stubbed)
+Initializing kernel bridge... 134/134 resolved (62 bridged, 72 stubbed)
+NV2A GPU initialized: VRAM=64MB RAMIN=1024KB
 Starting dashboard...
   PsCreateSystemThreadEx -> CRT _threadstart -> SEH prolog -> TLS copy
   _initterm (CRT initializers) -> OK
-  App entry (sub_00052A12) -> Dashboard main ENTERED!
-  sub_000558D0 (D3D/system init):
-    KeInitializeDpc -> KeInitializeTimerEx -> KeSetTimer(DPC)
-    NtAllocateVirtualMemory (x2) -> RtlInitializeCriticalSection
-    HalRequestSoftwareInterrupt -> DPC dispatched and completed!
-  -> Hangs deeper in D3D/display init (sub_00053DCE)
+  Dashboard main (sub_00052A12) entered
+  D3D/system init (sub_000558D0):
+    Timer/DPC init -> KeSetTimer + DPC dispatch OK
+    NV2A device creation (sub_00053DCE) -> SUCCESS (1MB at 0x00F80000)
+    D3D device setup (sub_0005387F) -> OK
+  File system:
+    C:\tdata, C:\tdata\fffe0000, C:\tdata\fffe0000\music -> opened OK
+    XIP archive paths ready (C:\ -> game/)
+  Xapp init chain (7 steps):
+    [1] Heap setup -> OK
+    [2] CRT lock init -> OK
+    [3] File/path init -> OK (NtCreateFile, RtlInitAnsiString)
+    [4] Random seed -> OK
+    [5] Display config -> OK
+    [6] Settings/EEPROM -> OK (NtReadFile, ExQueryPoolBlockSize)
+    [7] App init (sub_00029D34) -> FAILS (needs D3D8 device with vtable)
+  Cleanup -> DPC dispatch -> HalReturnToFirmware (stubbed)
 ```
 
-The dashboard's real initialization code is executing natively on Windows:
-- CRT thread init with proper TLS copy and SEH frame setup
-- Dashboard `main()` at 0x00052A12 called successfully
-- DPC/timer system working (shutdown watchdog timer dispatches and completes)
-- Memory allocation, critical sections, and kernel timing all functional
-- 12+ kernel calls executing correctly
+**44+ kernel calls executing correctly** including:
+- `NtAllocateVirtualMemory` (1MB GPU memory), `NtCreateFile` (directory creation)
+- `RtlInitAnsiString`, `RtlEnter/LeaveCriticalSection` (CRT locking)
+- `KeSetTimer`, `HalRequestSoftwareInterrupt` (DPC dispatch)
+- `ExAllocatePoolWithTag`, `ExFreePool` (heap management)
+- NV2A MMIO hook active for GPU register access at 0xFD000000
 
-Current blocker: hang in D3D/display initialization after the DPC system is set up. Need to trace deeper into the rendering init path.
+**Current blocker:** Step 7 of the xapp init chain needs a D3D8 device with a valid vtable for rendering methods. The NV2A instance memory is created but the Xbox D3D8 runtime functions (in the D3D section at 0xAD720) need to be wired up to the xboxrecomp D3D8-to-D3D11 translation layer.
 
 ## Building
 
@@ -132,7 +144,12 @@ The executable expects the original dashboard files in the `game/` subdirectory.
 - **Function recovery** - Recovered 3,087 "split-tail" functions the disassembler missed by scanning for stubbed call targets
 - **CRT thread init** - Hand-translated `_threadstart` to fix `g_seh_ebp` frame pointer sharing between SEH prolog and caller
 - **DPC dispatch** - Implemented `HalRequestSoftwareInterrupt` with deferred procedure call queue, shutdown watchdog timer runs
-- **SEH prolog fix** - Post-processed 48 generated call sites to re-read `ebp` from `g_seh_ebp` after `__SEH_prolog` returns
+- **SEH prolog fix** - Fixed generated `__SEH_prolog` to write back `g_seh_ebp`, plus post-processed 48 call sites
+- **NV2A device creation** - GPU instance memory (1MB) allocated and initialized, device setup succeeds
+- **CRT memcpy fix** - Replaced broken `sub_00055E90` (had unresolved jump-table targets clobbering esi/edi)
+- **CRT lock table** - Pre-initialized 36 critical section entries to prevent infinite recursion in `_mtinitlocknum`
+- **Full init chain** - All 7 xapp initialization steps execute: heap, locks, files, RNG, display, settings, app init
+- **File system** - `C:\` drive mapped to `game/`, `RtlInitAnsiString` bridge for proper path handling
 
 ## How It Works
 
