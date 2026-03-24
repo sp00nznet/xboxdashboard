@@ -140,12 +140,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * and D:\xodash\ for the online dashboard. We map both to our game/ dir. */
     {
         extern void xbox_path_init(const char* game_dir, const char* save_dir);
-        xbox_path_init(DASHBOARD_GAME_DIR, NULL);
+        /* Dashboard: C:\ maps to game/, T:/U:/Z: also map to game/ (all same partition) */
+        xbox_path_init(DASHBOARD_GAME_DIR, DASHBOARD_GAME_DIR);
     }
 
     /* Step 4: Initialize kernel bridge */
     printf("Initializing kernel bridge...\n");
     xbox_kernel_bridge_init();
+
+    /* Step 4b: Pre-initialize CRT lock table.
+     * The Xbox CRT has a table of critical section pointers at 0x113318,
+     * with 8 bytes per entry (pointer + flags), 36 entries (locks 0-35).
+     * Lock #10 is the "lock-table lock" used by _mtinitlocknum. If it's
+     * not pre-initialized, _lock() infinitely recurses trying to init it.
+     * Since we're single-threaded (RtlEnter/LeaveCriticalSection are no-ops),
+     * we just write dummy non-zero values so the init check passes. */
+    {
+        volatile uint32_t *lock_table = (volatile uint32_t *)((uintptr_t)0x113318 + g_xbox_mem_offset);
+        for (int i = 0; i < 36; i++) {
+            lock_table[i * 2] = 0xDEAD0000 + i;  /* fake CS pointer (non-zero) */
+            /* lock_table[i*2 + 1] stays 0 (flags) */
+        }
+    }
 
     /* Step 5: Initialize stack */
     g_esp = XBOX_STACK_TOP;
