@@ -42,101 +42,25 @@ extern void sub_0002A4ED(void);
 
 static void traced_sub_000558D0(void); /* forward decl */
 
+extern void sub_00052A12(void); /* original dashboard main (generated) */
+
+/* Public entry point for the traced sub_000558D0, called from generated code */
+void traced_sub_000558D0_entry(void)
+{
+    traced_sub_000558D0();
+}
+
 static void traced_dashboard_main(void)
 {
-    fprintf(stderr, "[DASH] Dashboard main entered\n"); fflush(stderr);
+    fprintf(stderr, "[DASH] Dashboard main entered, calling original sub_00052A12\n"); fflush(stderr);
 
-    fprintf(stderr, "[DASH] Calling sub_000558D0 (D3D/system init)...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); traced_sub_000558D0();
-    fprintf(stderr, "[DASH] sub_000558D0 returned (eax=0x%08X)\n", g_eax); fflush(stderr);
+    /* Call the original generated dashboard main.
+     * sub_000558D0 is redirected to traced_sub_000558D0_entry (see recomp_0001.c)
+     * which has critical g_seh_ebp fixes. Everything else runs through generated code. */
+    PUSH32(g_esp, 0); sub_00052A12();
 
-    /* Check fs:[0x20] for D3D cache - we set KPCR[0x20] to 0 */
-    g_eax = MEM32(0x20);
-    g_eax = MEM32(g_eax + 0x250);
-    /* ecx = 0 since KPCR[0x20] is 0 */
-
-    fprintf(stderr, "[DASH] Calling sub_00055A37...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_00055A37();
-    fprintf(stderr, "[DASH] sub_00055A37 returned\n"); fflush(stderr);
-
-    fprintf(stderr, "[DASH] Calling sub_000559DF...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_000559DF();
-    fprintf(stderr, "[DASH] sub_000559DF returned\n"); fflush(stderr);
-
-    /* Inline traced version of the full init chain */
-    fprintf(stderr, "[DASH] Starting xapp init (sub_0002A40F)...\n"); fflush(stderr);
-
-    /* sub_0002A4FD: call sub_0004F85A, then sub_0002A4D4 */
-    fprintf(stderr, "[DASH]  [1] sub_0004F85A(0x33582)...\n"); fflush(stderr);
-    PUSH32(g_esp, 0x33582);
-    PUSH32(g_esp, 0); sub_0004F85A();
-    fprintf(stderr, "[DASH]  [1] done\n"); fflush(stderr);
-
-    /* sub_0002A40F init chain */
-    uint32_t saved_ebp, saved_esp;
-    PUSH32(g_esp, g_seh_ebp);
-    saved_ebp = g_seh_ebp;
-    saved_esp = g_esp;
-    g_esp -= 0x208;
-    PUSH32(g_esp, g_esi);
-    g_esi = 0x121EF0; /* ecx = this */
-
-    extern void sub_000345FA(void);
-    extern void sub_0002A50F(void);
-    extern void sub_0004FB15(void);
-    extern void sub_00055C01(void);
-    extern void sub_00032978(void);
-    extern void sub_00029D34(void);
-
-    fprintf(stderr, "[DASH]  [2] sub_000345FA...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_000345FA();
-    fprintf(stderr, "[DASH]  [2] done\n"); fflush(stderr);
-
-    fprintf(stderr, "[DASH]  [3] sub_0002A50F...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_0002A50F();
-    fprintf(stderr, "[DASH]  [3] done\n"); fflush(stderr);
-
-    fprintf(stderr, "[DASH]  [4] sub_0004FB15...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_0004FB15();
-    fprintf(stderr, "[DASH]  [4] done (eax=0x%08X)\n", g_eax); fflush(stderr);
-
-    fprintf(stderr, "[DASH]  [5] sub_00055C01...\n"); fflush(stderr);
-    PUSH32(g_esp, g_eax);
-    PUSH32(g_esp, 0); sub_00055C01();
-    POP32(g_esp, g_ecx);
-    fprintf(stderr, "[DASH]  [5] done\n"); fflush(stderr);
-
-    fprintf(stderr, "[DASH]  [6] sub_00032978...\n"); fflush(stderr);
-    PUSH32(g_esp, 0); sub_00032978();
-    fprintf(stderr, "[DASH]  [6] done\n"); fflush(stderr);
-
-    g_esi = 0x121EF0; /* restore xapp this pointer (callees clobbered g_esi) */
-    fprintf(stderr, "[DASH]  [7] sub_00029D34 (this=0x%08X)...\n", g_esi); fflush(stderr);
-    g_ecx = g_esi;
-    PUSH32(g_esp, 0); sub_00029D34();
-    fprintf(stderr, "[DASH]  [7] done (eax=0x%08X) - %s\n", g_eax,
-            (g_eax & 0xFF) ? "SUCCESS" : "FAILED"); fflush(stderr);
-
-    /* If xapp init failed (no D3D device), force success to continue */
-    if (!(g_eax & 0xFF)) {
-        fprintf(stderr, "[DASH]  [7] FORCING SUCCESS (D3D not ready)\n"); fflush(stderr);
-        g_eax = 1;
-    }
-
-    /* Return result */
-    POP32(g_esp, g_esi);
-    g_esp = saved_esp;
-    POP32(g_esp, g_seh_ebp);
-    /* eax already set by sub_00029D34 */
-    g_esp += 4; /* ret from sub_0002A4FD */
-
-    PUSH32(g_esp, 0);
-    PUSH32(g_esp, 1);
-    PUSH32(g_esp, 1);
-    PUSH32(g_esp, 0); sub_0005586B();
-
-    g_eax = 0;
-    g_esp += 8; /* ret 4 */
+    fprintf(stderr, "[DASH] sub_00052A12 returned\n"); fflush(stderr);
+    g_esp += 4; /* ret */
 }
 
 extern uint32_t g_seh_ebp;
@@ -258,6 +182,7 @@ static void traced_sub_000558D0(void)
     if (g_eax != 0) {
         /* Non-zero = D3D device created successfully */
         fprintf(stderr, "[TRACE] D3D init success (device=0x%08X), calling sub_0005591E\n", g_eax); fflush(stderr);
+        g_seh_ebp = ebp; /* CRITICAL: sub_0005591E is fpo_leaf */
         sub_0005591E();
         return;
     }

@@ -135,6 +135,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     printf("Initializing Xbox kernel replacement...\n");
     xbox_kernel_init();
 
+    /* Step 3a: Initialize NV2A GPU emulation.
+     * The D3D section code reads/writes NV2A registers at 0xFD000000.
+     * The MMIO hook uses a VEH to intercept these and route to software NV2A. */
+    {
+        extern void nv2a_hook_init(ptrdiff_t xbox_mem_offset);
+        nv2a_hook_init(g_xbox_mem_offset);
+    }
+
     /* Step 3b: Set game directory for file I/O
      * The dashboard accesses C:\ for its own files (XIP archives, fonts, audio)
      * and D:\xodash\ for the online dashboard. We map both to our game/ dir. */
