@@ -135,6 +135,7 @@ static void traced_sub_000558D0(void)
     uint32_t ebp;
     int _flags = 0;
 
+    uint32_t saved_g_seh_ebp = g_seh_ebp; /* save for restoration after sub_0005591E */
     fprintf(stderr, "[TRACE] sub_000558D0 entered\n"); fflush(stderr);
 
     PUSH32(g_esp, ebp);
@@ -184,6 +185,10 @@ static void traced_sub_000558D0(void)
         fprintf(stderr, "[TRACE] D3D init success (device=0x%08X), calling sub_0005591E\n", g_eax); fflush(stderr);
         g_seh_ebp = ebp; /* CRITICAL: sub_0005591E is fpo_leaf */
         sub_0005591E();
+        /* sub_0005591E's epilog uses g_seh_ebp (our ebp) to clean up.
+         * Restore g_seh_ebp for subsequent functions. */
+        g_seh_ebp = saved_g_seh_ebp;
+        fprintf(stderr, "[TRACE] sub_0005591E returned, esp=0x%08X\n", g_esp); fflush(stderr);
         return;
     }
 
