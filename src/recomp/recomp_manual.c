@@ -17,6 +17,99 @@ extern volatile uint64_t g_icall_count;
 
 typedef void (*recomp_func_t)(void);
 
+/* D3D8 device (created in main.c) */
+extern void *g_d3d_device; /* IDirect3DDevice8* */
+
+/* Forward declarations for D3D8 vtable methods we call */
+typedef long (__stdcall *PFN_Clear)(void *dev, uint32_t count, void *rects,
+                                     uint32_t flags, uint32_t color, float z, uint32_t stencil);
+typedef long (__stdcall *PFN_Present)(void *dev, void *a, void *b, void *c, void *d);
+typedef long (__stdcall *PFN_BeginScene)(void *dev);
+typedef long (__stdcall *PFN_EndScene)(void *dev);
+typedef long (__stdcall *PFN_SetRenderState)(void *dev, uint32_t state, uint32_t value);
+typedef long (__stdcall *PFN_SetTransform)(void *dev, uint32_t state, void *matrix);
+
+/* Access vtable methods via COM interface */
+#define D3D_VTBL(dev) (*(void***)(dev))
+/* Xbox D3D8 vtable offsets (from d3d8_xbox.h) */
+#define VTBL_Clear          43
+#define VTBL_Present        15
+#define VTBL_BeginScene     40
+#define VTBL_EndScene       41
+#define VTBL_SetRenderState 57
+#define VTBL_SetTransform   44
+
+static inline long d3d_call_clear(uint32_t count, void *rects, uint32_t flags,
+                                   uint32_t color, float z, uint32_t stencil) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_Clear)vt[VTBL_Clear])(g_d3d_device, count, rects, flags, color, z, stencil);
+}
+
+static inline long d3d_call_present(void) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_Present)vt[VTBL_Present])(g_d3d_device, NULL, NULL, NULL, NULL);
+}
+
+static inline long d3d_call_beginscene(void) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_BeginScene)vt[VTBL_BeginScene])(g_d3d_device);
+}
+
+static inline long d3d_call_endscene(void) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_EndScene)vt[VTBL_EndScene])(g_d3d_device);
+}
+
+static inline long d3d_call_setrenderstate(uint32_t state, uint32_t value) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetRenderState)vt[VTBL_SetRenderState])(g_d3d_device, state, value);
+}
+
+static inline long d3d_call_settransform(uint32_t type, void *matrix) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetTransform)vt[VTBL_SetTransform])(g_d3d_device, type, matrix);
+}
+
+/* ── D3D Bridge Functions ──────────────────────────────────── */
+
+/**
+ * sub_000AD8D0 - D3DDevice_SetRenderState_Simple (171 calls)
+ * Convention: PUSH32(value), PUSH32(state), POP32(edx), ecx=0, PUSH32(0), call
+ * edx = render state enum, stack[+4] = value
+ */
+void bridge_SetRenderState(void)
+{
+    uint32_t value = MEM32(g_esp + 8); /* arg pushed first (higher addr) */
+    uint32_t state = g_edx;            /* state enum in edx */
+    g_esp += 4; /* pop dummy return address */
+    g_eax = (uint32_t)d3d_call_setrenderstate(state, value);
+    /* caller cleans 1 stack arg */
+}
+
+/**
+ * sub_000AF380 - D3DDevice_SetTransform (30 calls)
+ * Convention: PUSH32(matrix_ptr), PUSH32(type), PUSH32(0), call
+ * stack[+4] = transform type, stack[+8] = matrix pointer
+ */
+void bridge_SetTransform(void)
+{
+    uint32_t type      = MEM32(g_esp + 4);
+    uint32_t matrix_va = MEM32(g_esp + 8);
+    g_esp += 4; /* pop dummy return address */
+    if (matrix_va && matrix_va < 0x04000000) {
+        g_eax = (uint32_t)d3d_call_settransform(type, (void *)XBOX_PTR(matrix_va));
+    } else {
+        g_eax = 0;
+    }
+    /* caller cleans 2 stack args */
+}
+
 /* Register state and memory offset provided by recomp_types.h */
 
 /* ── Manual function overrides ─────────────────────────────── */
@@ -385,6 +478,10 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x000579F8) return fixed_seh_prolog;
     /* Trace the dashboard main and init chain */
     if (xbox_va == 0x00052A12) return traced_dashboard_main;
+    /* D3D8 method bridges */
+    if (xbox_va == 0x000AD8D0) return bridge_SetRenderState;
+    if (xbox_va == 0x000AF380) return bridge_SetTransform;
+
     /* Fixed memcpy that properly saves/restores esi/edi */
     if (xbox_va == 0x00055E90) return fixed_memcpy;
     /* Stub D3D8 Direct3DCreate - return fake device pointer */

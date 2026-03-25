@@ -88,7 +88,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
 /* ── Dashboard Window ──────────────────────────────────────── */
 
 static HWND g_dashboard_hwnd = NULL;
-static IDirect3DDevice8 *g_d3d_device = NULL;
+IDirect3DDevice8 *g_d3d_device = NULL; /* non-static: accessed by D3D bridges */
 
 static LRESULT CALLBACK dashboard_wndproc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
