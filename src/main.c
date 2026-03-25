@@ -156,7 +156,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     printf("Initializing kernel bridge...\n");
     xbox_kernel_bridge_init();
 
-    /* Step 4b: Pre-initialize CRT lock table.
+    /* Step 4b: Pre-initialize CRT thread index.
+     * The CRT uses MEM32(0x12D798) as the TLS slot index for per-thread
+     * data (__getptd). In BSS it should be 0 but gets corrupted.
+     * Set it to 0 to ensure single-threaded CRT works correctly. */
+    {
+        volatile uint32_t *tls_idx = (volatile uint32_t *)((uintptr_t)0x12D798 + g_xbox_mem_offset);
+        *tls_idx = 0;
+    }
+
+    /* Step 4c: Pre-initialize CRT lock table.
      * The Xbox CRT has a table of critical section pointers at 0x113318,
      * with 8 bytes per entry (pointer + flags), 36 entries (locks 0-35).
      * Lock #10 is the "lock-table lock" used by _mtinitlocknum. If it's
