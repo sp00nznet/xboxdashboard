@@ -15,8 +15,8 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | 0 | Project setup & XBE extraction | DONE |
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 6,323 functions, 134 kernel imports |
 | 2 | Lift to C & first build | DONE - 628K lines of C, ~6MB native exe |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - 44+ kernel calls, full init chain |
-| 4 | UI rendering (D3D8 init, 3D orb, fonts) | IN PROGRESS - NV2A device created, D3D8 next |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - 50+ kernel calls, full init chain |
+| 4 | UI rendering (D3D8 init, 3D orb, fonts) | IN PROGRESS - **Main loop running** (2M+ frames/sec) |
 | 5 | Polish (input, audio, settings) | Pending |
 
 ## What's Inside the Dashboard
@@ -102,7 +102,7 @@ Starting dashboard...
 - `ExAllocatePoolWithTag`, `ExFreePool` (heap management)
 - NV2A MMIO hook active for GPU register access at 0xFD000000
 
-**Current blocker:** Step 7 of the xapp init chain needs a D3D8 device with a valid vtable for rendering methods. The NV2A instance memory is created but the Xbox D3D8 runtime functions (in the D3D section at 0xAD720) need to be wired up to the xboxrecomp D3D8-to-D3D11 translation layer.
+**MAIN LOOP RUNNING:** The dashboard's tick+render loop executes at 2.2M frames/5sec with D3D methods stubbed as no-ops. All 501 D3D section functions return S_OK immediately. The dashboard thinks it's rendering but nothing is displayed. Next step: wire up the xboxrecomp D3D8-to-D3D11 layer so frames actually produce pixels.
 
 ## Building
 
