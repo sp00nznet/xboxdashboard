@@ -102,7 +102,7 @@ Starting dashboard...
 - `ExAllocatePoolWithTag`, `ExFreePool` (heap management)
 - NV2A MMIO hook active for GPU register access at 0xFD000000
 
-**MAIN LOOP RUNNING:** The dashboard's tick+render loop executes at 2.2M frames/5sec with D3D methods stubbed as no-ops. All 501 D3D section functions return S_OK immediately. The dashboard thinks it's rendering but nothing is displayed. Next step: wire up the xboxrecomp D3D8-to-D3D11 layer so frames actually produce pixels.
+**WINDOW RENDERING AT 33 FPS:** A 640x480 window displays with D3D11 swap chain via the xboxrecomp D3D8-to-D3D11 translation layer. The main loop runs tick+render continuously. D3D bridge functions route SetRenderState (171 call sites) and SetTransform (30 call sites) to the real D3D11 backend. Clear+Present runs each frame. Next: bridge remaining D3D methods (BeginScene, EndScene, DrawPrimitive, CreateTexture) and load XIP archives for dashboard UI assets.
 
 ## Building
 
@@ -150,6 +150,9 @@ The executable expects the original dashboard files in the `game/` subdirectory.
 - **CRT lock table** - Pre-initialized 36 critical section entries to prevent infinite recursion in `_mtinitlocknum`
 - **Full init chain** - All 7 xapp initialization steps execute: heap, locks, files, RNG, display, settings, app init
 - **File system** - `C:\` drive mapped to `game/`, `RtlInitAnsiString` bridge for proper path handling
+- **D3D8 window** - 640x480 window with D3D11 swap chain, presenting at ~33 FPS with VSync
+- **D3D bridges** - SetRenderState and SetTransform routed to D3D8-to-D3D11 layer
+- **Main loop** - Dashboard tick+render loop running continuously with frame presentation
 
 ## How It Works
 
