@@ -85,6 +85,94 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* ── Dashboard Window ──────────────────────────────────────── */
+
+static HWND g_dashboard_hwnd = NULL;
+static IDirect3DDevice8 *g_d3d_device = NULL;
+
+static LRESULT CALLBACK dashboard_wndproc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_CLOSE:
+        PostQuitMessage(0);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcA(hWnd, msg, wParam, lParam);
+}
+
+static HWND create_dashboard_window(HINSTANCE hInstance)
+{
+    WNDCLASSEXA wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = dashboard_wndproc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wc.lpszClassName = "XboxDashboard";
+    RegisterClassExA(&wc);
+
+    /* Xbox dashboard renders at 640x480 */
+    RECT rc = {0, 0, 640, 480};
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+
+    HWND hwnd = CreateWindowExA(0, "XboxDashboard", "Xbox Dashboard - Recompiled",
+                                WS_OVERLAPPEDWINDOW,
+                                CW_USEDEFAULT, CW_USEDEFAULT,
+                                rc.right - rc.left, rc.bottom - rc.top,
+                                NULL, NULL, hInstance, NULL);
+    if (hwnd) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
+    return hwnd;
+}
+
+static BOOL init_d3d_device(HWND hwnd)
+{
+    IDirect3D8 *d3d = xbox_Direct3DCreate8(0);
+    if (!d3d) {
+        fprintf(stderr, "[D3D8] Failed to create IDirect3D8\n");
+        return FALSE;
+    }
+
+    D3DPRESENT_PARAMETERS pp = {0};
+    pp.BackBufferWidth = 640;
+    pp.BackBufferHeight = 480;
+    pp.BackBufferFormat = 0x12; /* D3DFMT_A8R8G8B8 */
+    pp.BackBufferCount = 1;
+    pp.SwapEffect = 1; /* D3DSWAPEFFECT_DISCARD */
+    pp.hDeviceWindow = hwnd;
+    pp.Windowed = TRUE;
+    pp.EnableAutoDepthStencil = TRUE;
+    pp.AutoDepthStencilFormat = 0x2A; /* D3DFMT_D24S8 */
+
+    HRESULT hr = d3d->lpVtbl->CreateDevice(d3d, 0, 1, hwnd, 0x40, &pp, &g_d3d_device);
+    if (FAILED(hr)) {
+        fprintf(stderr, "[D3D8] CreateDevice failed: 0x%08lX\n", hr);
+        return FALSE;
+    }
+
+    fprintf(stderr, "[D3D8] Device created successfully: %ux%u\n", pp.BackBufferWidth, pp.BackBufferHeight);
+    return TRUE;
+}
+
+/* ── Per-frame D3D pump (called from main loop) ──────────── */
+
+void dashboard_present_frame(void)
+{
+    if (!g_d3d_device) return;
+
+    /* Clear to Xbox dark green */
+    g_d3d_device->lpVtbl->Clear(g_d3d_device, 0, NULL, 1 | 2,
+                                 0xFF003300, 1.0f, 0);
+    /* Present */
+    g_d3d_device->lpVtbl->Present(g_d3d_device, NULL, NULL, NULL, NULL);
+}
+
 /* ── WinMain ───────────────────────────────────────────────── */
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
@@ -182,6 +270,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     /* Step 5: Initialize stack */
     g_esp = XBOX_STACK_TOP;
+
+    /* Step 5b: Create the dashboard window and D3D device */
+    printf("Creating dashboard window...\n");
+    g_dashboard_hwnd = create_dashboard_window(hInstance);
+    if (!g_dashboard_hwnd) {
+        MessageBoxA(NULL, "Failed to create dashboard window.",
+                    "Xbox Dashboard Recomp", MB_ICONERROR);
+        return 1;
+    }
+
+    printf("Initializing D3D8 device...\n");
+    if (!init_d3d_device(g_dashboard_hwnd)) {
+        MessageBoxA(NULL, "Failed to create D3D8 device.\n"
+                    "Make sure your GPU supports D3D11 Feature Level 10.0.",
+                    "Xbox Dashboard Recomp", MB_ICONERROR);
+        return 1;
+    }
 
     printf("\n=== Initialization complete ===\n");
     printf("Entry point: 0x%08X\n", DASHBOARD_ENTRY_POINT);
