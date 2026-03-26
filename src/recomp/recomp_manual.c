@@ -463,6 +463,7 @@ void d3d_bridge_new_frame(void)
  * The CRT heap (RtlAllocateHeap chain) hangs because the heap handle
  * at 0x12DED0 isn't valid. Bridge to xbox_HeapAlloc instead.
  */
+static int g_new_count = 0;
 void bridge_operator_new(void)
 {
     uint32_t size = MEM32(g_esp + 4);
@@ -472,6 +473,11 @@ void bridge_operator_new(void)
     uint32_t va = xbox_HeapAlloc(size, 16);
     if (va) {
         memset((void *)XBOX_PTR(va), 0, size);
+    }
+    g_new_count++;
+    if (g_new_count <= 50) {
+        fprintf(stderr, "[NEW] #%d size=%u → 0x%08X\n", g_new_count, size, va);
+        fflush(stderr);
     }
     g_eax = va;
     /* original does POP32 ecx twice + ret to clean 1 arg, but since
