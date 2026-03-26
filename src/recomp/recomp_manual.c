@@ -510,63 +510,55 @@ static void scene_render(void)
     g_esp += 4; /* pop dummy return */
     if (!g_d3d_device) { g_eax = 0; return; }
 
-    /* Generate a simple green circle/ring to represent the orb.
-     * Use a triangle fan with 18 segments = 20 vertices. */
-    #define ORB_SEGS 18
-    #define ORB_VERTS (ORB_SEGS + 2)
+    /* Draw a green disc using triangle list (avoids fan winding issues).
+     * 24 segments, each segment = 1 triangle = 3 vertices. */
+    #define ORB_SEGS 24
+    struct { float x, y, z; uint32_t color; } verts[ORB_SEGS * 3];
 
-    struct { float x, y, z; uint32_t color; } verts[ORB_VERTS];
+    float cx = 0.0f, cy = 0.0f;
+    float radius = 0.35f;         /* NDC units */
+    uint32_t center_color = 0xFF00CC00;
+    uint32_t edge_color   = 0xFF004400;
 
-    float cx = 0.0f, cy = 0.0f; /* center in screen space */
-    float radius = 80.0f;        /* orb radius */
-    uint32_t center_color = 0xFF00AA00; /* bright green center */
-    uint32_t edge_color   = 0xFF003300; /* dark green edge */
-
-    /* Center vertex */
-    verts[0].x = cx;
-    verts[0].y = cy;
-    verts[0].z = 0.5f;
-    verts[0].color = center_color;
-
-    /* Ring vertices */
-    for (int i = 0; i <= ORB_SEGS; i++) {
-        float angle = (float)i / (float)ORB_SEGS * 6.28318f;
-        verts[i + 1].x = cx + radius * cosf(angle);
-        verts[i + 1].y = cy + radius * sinf(angle);
-        verts[i + 1].z = 0.5f;
-        verts[i + 1].color = edge_color;
+    for (int i = 0; i < ORB_SEGS; i++) {
+        float a0 = (float)i / (float)ORB_SEGS * 6.28318f;
+        float a1 = (float)(i + 1) / (float)ORB_SEGS * 6.28318f;
+        int base = i * 3;
+        /* Center */
+        verts[base].x = cx; verts[base].y = cy;
+        verts[base].z = 0.0f; verts[base].color = center_color;
+        /* Edge vertex 1 */
+        verts[base+1].x = cx + radius * cosf(a0);
+        verts[base+1].y = cy + radius * sinf(a0);
+        verts[base+1].z = 0.0f; verts[base+1].color = edge_color;
+        /* Edge vertex 2 */
+        verts[base+2].x = cx + radius * cosf(a1);
+        verts[base+2].y = cy + radius * sinf(a1);
+        verts[base+2].z = 0.0f; verts[base+2].color = edge_color;
     }
 
-    /* Set up transforms: identity world/view, ortho projection */
+    /* All identity transforms — vertices in NDC space (-1 to 1) */
     float identity[16] = {
         1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
     };
-    /* Simple ortho projection mapping [-320,320] x [-240,240] to NDC */
-    float proj[16] = {
-        2.0f/640.0f, 0, 0, 0,
-        0, 2.0f/480.0f, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1
-    };
-
     d3d_call_settransform(0, identity);  /* world */
     d3d_call_settransform(1, identity);  /* view */
-    d3d_call_settransform(2, proj);      /* projection */
+    d3d_call_settransform(2, identity);  /* projection */
 
-    /* Render state: disable textures, enable vertex color */
-    d3d_call_setrenderstate(4, 2);   /* D3DRS_CULLMODE = CCW */
-    d3d_call_setrenderstate(9, 0);   /* D3DRS_ALPHABLENDENABLE = off */
-    d3d_call_setrenderstate(19, 0);  /* D3DRS_LIGHTING = off */
-    d3d_call_setrenderstate(7, 2);   /* D3DRS_ZENABLE = off */
+    /* Render state: PC D3D8 enum values */
+    d3d_call_setrenderstate(22, 1);  /* D3DRS_CULLMODE = D3DCULL_NONE */
+    d3d_call_setrenderstate(27, 0);  /* D3DRS_ALPHABLENDENABLE = FALSE */
+    d3d_call_setrenderstate(137, 0); /* D3DRS_LIGHTING = FALSE */
+    d3d_call_setrenderstate(7, 0);   /* D3DRS_ZENABLE = D3DZB_FALSE */
     d3d_call_settexture(0, NULL);
 
     /* Set FVF = XYZ | DIFFUSE (0x042) */
     d3d_call_setvertexshader(0x042);
 
-    /* Draw the orb as a triangle fan */
+    /* Draw as triangle list */
     {
-        d3d_call_drawprimitiveup(6, /* D3DPT_TRIANGLEFAN */
-                                  ORB_SEGS,
+        d3d_call_drawprimitiveup(4, /* D3DPT_TRIANGLELIST */
+                                  ORB_SEGS, /* primitive count */
                                   verts, sizeof(verts[0]));
     }
 

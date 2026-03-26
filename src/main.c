@@ -235,10 +235,14 @@ void dashboard_begin_frame(void)
 {
     if (!g_d3d_device) return;
 
-    /* Clear to Xbox dark green */
+    /* Clear to black (dashboard background) */
     g_d3d_device->lpVtbl->Clear(g_d3d_device, 0, NULL, 1 | 2,
-                                 0xFF003300, 1.0f, 0);
+                                 0xFF000000, 1.0f, 0);
     g_d3d_device->lpVtbl->BeginScene(g_d3d_device);
+
+    /* Set CULL_NONE globally — the generated code's perspective projection
+     * produces inconsistent triangle winding for the background quad. */
+    g_d3d_device->lpVtbl->SetRenderState(g_d3d_device, 22, 1); /* CULLMODE = NONE */
 }
 
 /* Called after render: EndScene + Present */
