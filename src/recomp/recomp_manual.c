@@ -478,6 +478,148 @@ void bridge_operator_new(void)
      * callers typically don't clean (cdecl with frame restore), this is fine */
 }
 
+/* ── Minimal scene graph ───────────────────────────────────── */
+
+/* Synthetic Xbox VAs for custom scene functions.
+ * These are in an unused VA range (0x00F00xxx) and registered
+ * in recomp_lookup_manual so ICALL dispatch finds them. */
+/* Must be below 0x00400000 to pass the RECOMP_ICALL_SAFE range check */
+#define VA_SCENE_NOOP       0x00000101
+#define VA_SCENE_RENDER     0x00000102
+
+#include <math.h>
+
+/**
+ * No-op scene method. Used for device context vtable entries
+ * that need valid targets but don't need to do anything.
+ */
+static void scene_noop(void)
+{
+    g_esp += 4; /* pop dummy return */
+    g_eax = 0;
+}
+
+/**
+ * Scene root Render method - draws a green sphere (the Xbox orb).
+ * Called from render path via ICALL on scene_root vtable[+0x40].
+ *
+ * Convention: ecx = this (scene root), pushed before ICALL.
+ */
+static void scene_render(void)
+{
+    g_esp += 4; /* pop dummy return */
+    if (!g_d3d_device) { g_eax = 0; return; }
+
+    /* Generate a simple green circle/ring to represent the orb.
+     * Use a triangle fan with 18 segments = 20 vertices. */
+    #define ORB_SEGS 18
+    #define ORB_VERTS (ORB_SEGS + 2)
+
+    struct { float x, y, z; uint32_t color; } verts[ORB_VERTS];
+
+    float cx = 0.0f, cy = 0.0f; /* center in screen space */
+    float radius = 80.0f;        /* orb radius */
+    uint32_t center_color = 0xFF00AA00; /* bright green center */
+    uint32_t edge_color   = 0xFF003300; /* dark green edge */
+
+    /* Center vertex */
+    verts[0].x = cx;
+    verts[0].y = cy;
+    verts[0].z = 0.5f;
+    verts[0].color = center_color;
+
+    /* Ring vertices */
+    for (int i = 0; i <= ORB_SEGS; i++) {
+        float angle = (float)i / (float)ORB_SEGS * 6.28318f;
+        verts[i + 1].x = cx + radius * cosf(angle);
+        verts[i + 1].y = cy + radius * sinf(angle);
+        verts[i + 1].z = 0.5f;
+        verts[i + 1].color = edge_color;
+    }
+
+    /* Set up transforms: identity world/view, ortho projection */
+    float identity[16] = {
+        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
+    };
+    /* Simple ortho projection mapping [-320,320] x [-240,240] to NDC */
+    float proj[16] = {
+        2.0f/640.0f, 0, 0, 0,
+        0, 2.0f/480.0f, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    };
+
+    d3d_call_settransform(0, identity);  /* world */
+    d3d_call_settransform(1, identity);  /* view */
+    d3d_call_settransform(2, proj);      /* projection */
+
+    /* Render state: disable textures, enable vertex color */
+    d3d_call_setrenderstate(4, 2);   /* D3DRS_CULLMODE = CCW */
+    d3d_call_setrenderstate(9, 0);   /* D3DRS_ALPHABLENDENABLE = off */
+    d3d_call_setrenderstate(19, 0);  /* D3DRS_LIGHTING = off */
+    d3d_call_setrenderstate(7, 2);   /* D3DRS_ZENABLE = off */
+    d3d_call_settexture(0, NULL);
+
+    /* Set FVF = XYZ | DIFFUSE (0x042) */
+    d3d_call_setvertexshader(0x042);
+
+    /* Draw the orb as a triangle fan */
+    {
+        d3d_call_drawprimitiveup(6, /* D3DPT_TRIANGLEFAN */
+                                  ORB_SEGS,
+                                  verts, sizeof(verts[0]));
+    }
+
+    g_eax = 0;
+    #undef ORB_SEGS
+    #undef ORB_VERTS
+}
+
+/**
+ * Set up minimal scene graph objects in Xbox heap memory.
+ * Creates device context + scene root with vtables pointing to
+ * our custom functions registered via synthetic VAs.
+ */
+void dashboard_setup_scene(void)
+{
+    /* Allocate vtable for device context (needs entries at +0x0C, +0x10, +0x14) */
+    uint32_t dev_vtbl_va = xbox_HeapAlloc(64, 16); /* 16 uint32 entries */
+    if (!dev_vtbl_va) return;
+    memset((void *)XBOX_PTR(dev_vtbl_va), 0, 64);
+    MEM32(dev_vtbl_va + 0x0C) = VA_SCENE_NOOP;  /* vtable[3]: cleanup */
+    MEM32(dev_vtbl_va + 0x10) = VA_SCENE_NOOP;  /* vtable[4]: begin */
+    MEM32(dev_vtbl_va + 0x14) = VA_SCENE_NOOP;  /* vtable[5]: prepare */
+
+    /* Allocate device context object (vtable ptr at offset 0) */
+    uint32_t dev_ctx_va = xbox_HeapAlloc(64, 16);
+    if (!dev_ctx_va) return;
+    memset((void *)XBOX_PTR(dev_ctx_va), 0, 64);
+    MEM32(dev_ctx_va) = dev_vtbl_va; /* vtable pointer */
+
+    /* Store at XApp+0x4C (0x121F3C) */
+    MEM32(0x121EF0 + 0x4C) = dev_ctx_va;
+
+    /* Allocate vtable for scene root (needs entry at +0x40 = vtable[16]) */
+    uint32_t root_vtbl_va = xbox_HeapAlloc(128, 16); /* 32 entries */
+    if (!root_vtbl_va) return;
+    memset((void *)XBOX_PTR(root_vtbl_va), 0, 128);
+    MEM32(root_vtbl_va + 0x40) = VA_SCENE_RENDER; /* vtable[16]: Render */
+
+    /* Allocate scene root object */
+    uint32_t root_va = xbox_HeapAlloc(128, 16);
+    if (!root_va) return;
+    memset((void *)XBOX_PTR(root_va), 0, 128);
+    MEM32(root_va) = root_vtbl_va; /* vtable pointer */
+
+    /* Store at XApp+0x64 */
+    MEM32(0x121EF0 + 0x64) = root_va;
+
+    fprintf(stderr, "[SCENE] dev_ctx=0x%08X root=0x%08X\n", dev_ctx_va, root_va);
+    fprintf(stderr, "[SCENE] XApp+4C=0x%08X XApp+64=0x%08X\n",
+            MEM32(0x121EF0 + 0x4C), MEM32(0x121EF0 + 0x64));
+    fflush(stderr);
+}
+
 /* Register state and memory offset provided by recomp_types.h */
 
 /* ── Manual function overrides ─────────────────────────────── */
@@ -859,6 +1001,10 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x000B1860) return bridge_SetVertexShader;
     if (xbox_va == 0x000B0B50) return bridge_DrawVertices;
     if (xbox_va == 0x000AF110) return bridge_Swap;
+
+    /* Minimal scene graph methods */
+    if (xbox_va == VA_SCENE_NOOP)   return scene_noop;
+    if (xbox_va == VA_SCENE_RENDER) return scene_render;
 
     /* CRT heap: operator new → xbox_HeapAlloc */
     if (xbox_va == 0x00055A60) return bridge_operator_new;
