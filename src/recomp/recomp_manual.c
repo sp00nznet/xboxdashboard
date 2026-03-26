@@ -619,6 +619,82 @@ void dashboard_setup_scene(void)
     fflush(stderr);
 }
 
+/* ── Custom XIP file loader ────────────────────────────────── */
+
+/**
+ * Load a XIP file and populate the XIP entry structure at entry_va.
+ * Reads the file, parses the XIP0 header, allocates Xbox heap for
+ * the file data, and sets up the entry's resource table pointers.
+ */
+int dashboard_load_xip(const char *path, uint32_t entry_va)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "[XIP LOAD] Cannot open: %s\n", path);
+        return 0;
+    }
+
+    /* Get file size */
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (file_size <= 16) { fclose(f); return 0; }
+
+    /* Read header: XIP0 magic + fields */
+    uint8_t hdr[16];
+    if (fread(hdr, 1, 16, f) != 16) { fclose(f); return 0; }
+    if (memcmp(hdr, "XIP0", 4) != 0) {
+        fprintf(stderr, "[XIP LOAD] Bad magic in %s\n", path);
+        fclose(f);
+        return 0;
+    }
+
+    uint16_t num_entries = *(uint16_t *)(hdr + 8);
+
+    /* Allocate Xbox heap for entire file content */
+    uint32_t data_va = xbox_HeapAlloc((uint32_t)file_size, 4096);
+    if (!data_va) {
+        fprintf(stderr, "[XIP LOAD] Heap alloc failed for %ld bytes\n", file_size);
+        fclose(f);
+        return 0;
+    }
+
+    /* Read entire file into Xbox heap */
+    fseek(f, 0, SEEK_SET);
+    fread((void *)XBOX_PTR(data_va), 1, (size_t)file_size, f);
+    fclose(f);
+
+    /* The resource table starts at offset 16 (after header).
+     * Each entry is 16 bytes: offset(4), size(4), type(4), reserved(4).
+     * String table follows the resource table.
+     * Data offsets are relative to the string table end. */
+
+    uint32_t entry_table_va = data_va + 16;
+    /* Find string table start: after num_entries * 16 bytes of entry table */
+    uint32_t string_table_offset = 16 + num_entries * 16;
+    /* Find string table end by scanning for the first non-string data */
+    uint32_t str_end = string_table_offset;
+    uint8_t *file_data = (uint8_t *)XBOX_PTR(data_va);
+    while (str_end < (uint32_t)file_size && (file_data[str_end] >= 0x20 || file_data[str_end] == 0))
+        str_end++;
+    /* Data base = string table end, rounded to alignment */
+    uint32_t data_base_offset = (str_end + 3) & ~3;
+    /* Actually, looking at the XIP format: entry offsets are relative to data_base */
+    /* For now, assume data_base = start of file (offsets are absolute within file) */
+
+    /* Populate XIP entry structure */
+    MEM32(entry_va + 0x0C) = data_va;              /* data base (start of loaded file) */
+    MEM16(entry_va + 0x10) = num_entries;           /* resource count */
+    MEM32(entry_va + 0x18) = entry_table_va;        /* resource table pointer */
+    MEM8(entry_va + 0x14C) = 0;                     /* clear load flag (loading done) */
+    MEM8(entry_va + 0x130) = 1;                     /* mark as loaded */
+
+    fprintf(stderr, "[XIP LOAD] Loaded %s: %ld bytes → Xbox VA 0x%08X, %u entries\n",
+            path, file_size, data_va, num_entries);
+    fflush(stderr);
+    return 1;
+}
+
 /* Register state and memory offset provided by recomp_types.h */
 
 /* ── Manual function overrides ─────────────────────────────── */
