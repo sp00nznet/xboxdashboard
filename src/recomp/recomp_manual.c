@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include "recomp_types.h"
 
@@ -20,6 +21,9 @@ typedef void (*recomp_func_t)(void);
 /* D3D8 device (created in main.c) */
 extern void *g_d3d_device; /* IDirect3DDevice8* */
 
+/* Xbox heap allocator (from xbox_memory_layout.c) */
+extern uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
+
 /* Forward declarations for D3D8 vtable methods we call */
 typedef long (__stdcall *PFN_Clear)(void *dev, uint32_t count, void *rects,
                                      uint32_t flags, uint32_t color, float z, uint32_t stencil);
@@ -27,17 +31,35 @@ typedef long (__stdcall *PFN_Present)(void *dev, void *a, void *b, void *c, void
 typedef long (__stdcall *PFN_BeginScene)(void *dev);
 typedef long (__stdcall *PFN_EndScene)(void *dev);
 typedef long (__stdcall *PFN_SetRenderState)(void *dev, uint32_t state, uint32_t value);
-typedef long (__stdcall *PFN_SetTransform)(void *dev, uint32_t state, void *matrix);
+typedef long (__stdcall *PFN_SetTransform)(void *dev, uint32_t state, const void *matrix);
+typedef long (__stdcall *PFN_SetTexture)(void *dev, uint32_t stage, void *texture);
+typedef long (__stdcall *PFN_SetTextureStageState)(void *dev, uint32_t stage, uint32_t type, uint32_t value);
+typedef long (__stdcall *PFN_SetStreamSource)(void *dev, uint32_t stream, void *vb, uint32_t stride);
+typedef long (__stdcall *PFN_SetVertexShader)(void *dev, uint32_t handle);
+typedef long (__stdcall *PFN_DrawPrimitive)(void *dev, uint32_t type, uint32_t start, uint32_t count);
+typedef long (__stdcall *PFN_DrawPrimitiveUP)(void *dev, uint32_t type, uint32_t count,
+                                               const void *data, uint32_t stride);
+typedef long (__stdcall *PFN_SetViewport)(void *dev, const void *vp);
 
 /* Access vtable methods via COM interface */
 #define D3D_VTBL(dev) (*(void***)(dev))
-/* Xbox D3D8 vtable offsets (from d3d8_xbox.h) */
-#define VTBL_Clear          43
-#define VTBL_Present        15
-#define VTBL_BeginScene     40
-#define VTBL_EndScene       41
-#define VTBL_SetRenderState 57
-#define VTBL_SetTransform   44
+
+/* Correct vtable offsets from IDirect3DDevice8Vtbl in d3d8_xbox.h */
+#define VTBL_Present              8
+#define VTBL_BeginScene          10
+#define VTBL_EndScene            11
+#define VTBL_Clear               12
+#define VTBL_SetTransform        13
+#define VTBL_SetRenderState      15
+#define VTBL_SetTextureStageState 17
+#define VTBL_SetTexture          19
+#define VTBL_SetStreamSource     21
+#define VTBL_DrawPrimitive       25
+#define VTBL_DrawPrimitiveUP     27
+#define VTBL_SetViewport         37
+#define VTBL_SetVertexShader     44
+
+/* ── D3D helper call wrappers ──────────────────────────────── */
 
 static inline long d3d_call_clear(uint32_t count, void *rects, uint32_t flags,
                                    uint32_t color, float z, uint32_t stencil) {
@@ -70,32 +92,115 @@ static inline long d3d_call_setrenderstate(uint32_t state, uint32_t value) {
     return ((PFN_SetRenderState)vt[VTBL_SetRenderState])(g_d3d_device, state, value);
 }
 
-static inline long d3d_call_settransform(uint32_t type, void *matrix) {
+static inline long d3d_call_settransform(uint32_t type, const void *matrix) {
     if (!g_d3d_device) return 0;
     void **vt = D3D_VTBL(g_d3d_device);
     return ((PFN_SetTransform)vt[VTBL_SetTransform])(g_d3d_device, type, matrix);
+}
+
+static inline long d3d_call_settexture(uint32_t stage, void *texture) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetTexture)vt[VTBL_SetTexture])(g_d3d_device, stage, texture);
+}
+
+static inline long d3d_call_settexturestagestate(uint32_t stage, uint32_t type, uint32_t value) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetTextureStageState)vt[VTBL_SetTextureStageState])(g_d3d_device, stage, type, value);
+}
+
+static inline long d3d_call_setstreamsource(uint32_t stream, void *vb, uint32_t stride) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetStreamSource)vt[VTBL_SetStreamSource])(g_d3d_device, stream, vb, stride);
+}
+
+static inline long d3d_call_setvertexshader(uint32_t handle) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_SetVertexShader)vt[VTBL_SetVertexShader])(g_d3d_device, handle);
+}
+
+static inline long d3d_call_drawprimitive(uint32_t type, uint32_t start, uint32_t count) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_DrawPrimitive)vt[VTBL_DrawPrimitive])(g_d3d_device, type, start, count);
+}
+
+static inline long d3d_call_drawprimitiveup(uint32_t type, uint32_t count,
+                                              const void *data, uint32_t stride) {
+    if (!g_d3d_device) return 0;
+    void **vt = D3D_VTBL(g_d3d_device);
+    return ((PFN_DrawPrimitiveUP)vt[VTBL_DrawPrimitiveUP])(g_d3d_device, type, count, data, stride);
+}
+
+/* ── Vertex buffer tracking ────────────────────────────────── */
+
+/* Simple tracking for vertex buffers allocated in Xbox heap.
+ * The generated code gets Xbox VAs; we track the size/stride
+ * so DrawPrimitive can use DrawPrimitiveUP with the data. */
+#define MAX_VB_SLOTS 32
+static struct {
+    uint32_t data_va;   /* Xbox VA of vertex data (from xbox_HeapAlloc) */
+    uint32_t size;
+    uint32_t fvf;
+} g_vb_table[MAX_VB_SLOTS];
+static int g_vb_count = 0;
+
+/* Current stream source state */
+static uint32_t g_cur_stream_va = 0;
+static uint32_t g_cur_stream_stride = 0;
+static uint32_t g_cur_stream_size = 0;
+
+static int vb_find(uint32_t data_va) {
+    for (int i = 0; i < g_vb_count; i++)
+        if (g_vb_table[i].data_va == data_va) return i;
+    return -1;
+}
+
+/* D3D bridge logging - throttled to avoid spam */
+static uint64_t g_d3d_bridge_frame = 0;
+static int g_d3d_log_enabled = 1;
+
+static void d3d_log(const char *fmt, ...) {
+    if (!g_d3d_log_enabled) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fflush(stderr);
 }
 
 /* ── D3D Bridge Functions ──────────────────────────────────── */
 
 /**
  * sub_000AD8D0 - D3DDevice_SetRenderState_Simple (171 calls)
- * Convention: PUSH32(value), PUSH32(state), POP32(edx), ecx=0, PUSH32(0), call
- * edx = render state enum, stack[+4] = value
+ * edx = render state enum, stack[+8] = value
  */
 void bridge_SetRenderState(void)
 {
-    uint32_t value = MEM32(g_esp + 8); /* arg pushed first (higher addr) */
-    uint32_t state = g_edx;            /* state enum in edx */
+    uint32_t value = MEM32(g_esp + 8);
+    uint32_t state = g_edx;
     g_esp += 4; /* pop dummy return address */
     g_eax = (uint32_t)d3d_call_setrenderstate(state, value);
-    /* caller cleans 1 stack arg */
+}
+
+/**
+ * sub_000AD820 - D3DDevice_SetRenderState (from render state dispatcher)
+ * ecx = mapped state enum, edx = value
+ */
+void bridge_SetRenderState2(void)
+{
+    uint32_t state = g_ecx;
+    uint32_t value = g_edx;
+    g_esp += 4; /* pop dummy return address */
+    g_eax = (uint32_t)d3d_call_setrenderstate(state, value);
 }
 
 /**
  * sub_000AF380 - D3DDevice_SetTransform (30 calls)
- * Convention: PUSH32(matrix_ptr), PUSH32(type), PUSH32(0), call
- * stack[+4] = transform type, stack[+8] = matrix pointer
+ * stack[+4] = transform type, stack[+8] = matrix VA
  */
 void bridge_SetTransform(void)
 {
@@ -107,7 +212,270 @@ void bridge_SetTransform(void)
     } else {
         g_eax = 0;
     }
-    /* caller cleans 2 stack args */
+}
+
+/**
+ * sub_000AF490 - D3DDevice_SetTransform variant (same convention)
+ * stack[+4] = transform type, stack[+8] = matrix VA
+ */
+void bridge_SetTransform2(void)
+{
+    uint32_t type      = MEM32(g_esp + 4);
+    uint32_t matrix_va = MEM32(g_esp + 8);
+    g_esp += 4;
+    if (matrix_va && matrix_va < 0x04000000) {
+        g_eax = (uint32_t)d3d_call_settransform(type, (void *)XBOX_PTR(matrix_va));
+    } else {
+        g_eax = 0;
+    }
+}
+
+/**
+ * sub_000AF4C0 - D3DDevice_SetTransform (1-arg variant, likely projection)
+ * stack[+4] = matrix VA (implicit type, probably D3DTS_PROJECTION=2)
+ */
+void bridge_SetTransform3(void)
+{
+    uint32_t matrix_va = MEM32(g_esp + 4);
+    g_esp += 4;
+    if (matrix_va && matrix_va < 0x04000000) {
+        /* Assume projection transform (type 2) */
+        g_eax = (uint32_t)d3d_call_settransform(2, (void *)XBOX_PTR(matrix_va));
+    } else {
+        g_eax = 0;
+    }
+}
+
+/**
+ * sub_000ADDC0 - D3DDevice_SetTexture
+ * stack[+4] = stage, stack[+8] = texture ptr (0 = disable)
+ */
+void bridge_SetTexture(void)
+{
+    uint32_t stage   = MEM32(g_esp + 4);
+    uint32_t tex_va  = MEM32(g_esp + 8);
+    g_esp += 4;
+    /* For now, always set NULL texture (we don't have texture bridging yet) */
+    (void)tex_va;
+    g_eax = (uint32_t)d3d_call_settexture(stage, NULL);
+}
+
+/**
+ * sub_000B0520 - D3DDevice_CreateVertexBuffer
+ * stack[+4]=size, stack[+8]=usage, stack[+12]=fvf, stack[+16]=pool, stack[+20]=ppVB_va
+ * Allocates vertex data in Xbox heap so generated code can write to it.
+ */
+void bridge_CreateVertexBuffer(void)
+{
+    uint32_t size    = MEM32(g_esp + 4);
+    uint32_t usage   = MEM32(g_esp + 8);
+    uint32_t fvf     = MEM32(g_esp + 12);
+    uint32_t pool    = MEM32(g_esp + 16);
+    uint32_t out_va  = MEM32(g_esp + 20);
+    g_esp += 4;
+    (void)usage; (void)pool;
+
+    d3d_log("[D3D BRIDGE] CreateVertexBuffer(size=%u, fvf=0x%X, out=0x%08X)\n",
+            size, fvf, out_va);
+
+    /* Allocate data in Xbox heap */
+    uint32_t data_va = xbox_HeapAlloc(size, 16);
+    if (!data_va) {
+        d3d_log("[D3D BRIDGE]   FAILED: heap alloc returned 0\n");
+        g_eax = 0x80004005u; /* E_FAIL */
+        return;
+    }
+
+    /* Zero the buffer */
+    memset((void *)XBOX_PTR(data_va), 0, size);
+
+    /* Track it */
+    if (g_vb_count < MAX_VB_SLOTS) {
+        g_vb_table[g_vb_count].data_va = data_va;
+        g_vb_table[g_vb_count].size = size;
+        g_vb_table[g_vb_count].fvf = fvf;
+        g_vb_count++;
+    }
+
+    /* Write the data VA as the "VB handle" to the output pointer */
+    MEM32(out_va) = data_va;
+    d3d_log("[D3D BRIDGE]   OK: data_va=0x%08X\n", data_va);
+    g_eax = 0; /* S_OK */
+}
+
+/**
+ * sub_000B0580 - D3DDevice_Lock / resource data setup
+ * stack[+4]=vb_handle, stack[+8]=offset, stack[+12]=size,
+ * stack[+16]=ppData_va, stack[+20]=flags
+ * Returns data pointer so generated code can write vertex data.
+ */
+void bridge_LockVertexBuffer(void)
+{
+    uint32_t vb_handle = MEM32(g_esp + 4);
+    uint32_t offset    = MEM32(g_esp + 8);
+    uint32_t size      = MEM32(g_esp + 12);
+    uint32_t pdata_va  = MEM32(g_esp + 16);
+    uint32_t flags     = MEM32(g_esp + 20);
+    g_esp += 4;
+    (void)size; (void)flags;
+
+    d3d_log("[D3D BRIDGE] Lock(vb=0x%08X, off=%u, size=%u, pdata=0x%08X)\n",
+            vb_handle, offset, size, pdata_va);
+
+    /* vb_handle IS the data VA (from our CreateVB bridge) */
+    uint32_t data_ptr = vb_handle + offset;
+
+    /* Write the data pointer to the output location */
+    if (pdata_va && pdata_va < 0x04000000) {
+        MEM32(pdata_va) = data_ptr;
+    }
+
+    d3d_log("[D3D BRIDGE]   data_ptr=0x%08X\n", data_ptr);
+    g_eax = 0; /* S_OK */
+}
+
+/**
+ * sub_000B14C0 - D3DDevice_SetStreamSource
+ * stack[+4]=stream, stack[+8]=vb_handle, stack[+12]=stride
+ */
+void bridge_SetStreamSource(void)
+{
+    uint32_t stream   = MEM32(g_esp + 4);
+    uint32_t vb_va    = MEM32(g_esp + 8);
+    uint32_t stride   = MEM32(g_esp + 12);
+    g_esp += 4;
+
+    d3d_log("[D3D BRIDGE] SetStreamSource(stream=%u, vb=0x%08X, stride=%u)\n",
+            stream, vb_va, stride);
+
+    if (stream == 0) {
+        g_cur_stream_va = vb_va;
+        g_cur_stream_stride = stride;
+        /* Look up size */
+        int idx = vb_find(vb_va);
+        g_cur_stream_size = (idx >= 0) ? g_vb_table[idx].size : 0;
+    }
+    g_eax = 0;
+}
+
+/**
+ * sub_000B1860 - D3DDevice_SetVertexShader
+ * stack[+4] = FVF handle (or shader handle)
+ */
+void bridge_SetVertexShader(void)
+{
+    uint32_t handle = MEM32(g_esp + 4);
+    g_esp += 4;
+
+    d3d_log("[D3D BRIDGE] SetVertexShader(0x%X)\n", handle);
+    g_eax = (uint32_t)d3d_call_setvertexshader(handle);
+}
+
+/**
+ * sub_000B0B50 - D3DDevice_DrawVertices (Xbox-specific)
+ * stack[+4]=primtype, stack[+8]=start_vertex, stack[+12]=vertex_count
+ * Uses DrawPrimitiveUP with vertex data from the current stream source.
+ */
+void bridge_DrawVertices(void)
+{
+    uint32_t prim_type    = MEM32(g_esp + 4);
+    uint32_t start_vertex = MEM32(g_esp + 8);
+    uint32_t vertex_count = MEM32(g_esp + 12);
+    g_esp += 4;
+
+    d3d_log("[D3D BRIDGE] DrawVertices(type=%u, start=%u, count=%u)\n",
+            prim_type, start_vertex, vertex_count);
+
+    if (!g_cur_stream_va || !g_cur_stream_stride || vertex_count == 0) {
+        d3d_log("[D3D BRIDGE]   SKIP: no stream source or zero count\n");
+        g_eax = 0;
+        return;
+    }
+
+    /* Convert vertex count to primitive count */
+    uint32_t prim_count = 0;
+    switch (prim_type) {
+        case 1: prim_count = vertex_count;     break; /* POINTLIST */
+        case 2: prim_count = vertex_count / 2; break; /* LINELIST */
+        case 3: prim_count = vertex_count - 1; break; /* LINESTRIP */
+        case 4: prim_count = vertex_count / 3; break; /* TRIANGLELIST */
+        case 5: prim_count = vertex_count - 2; break; /* TRIANGLESTRIP */
+        case 6: prim_count = vertex_count - 2; break; /* TRIANGLEFAN */
+        default: prim_count = vertex_count;    break;
+    }
+
+    if (prim_count == 0) {
+        g_eax = 0;
+        return;
+    }
+
+    /* Get pointer to vertex data in Xbox memory */
+    uint32_t data_va = g_cur_stream_va + (start_vertex * g_cur_stream_stride);
+    void *data_ptr = (void *)XBOX_PTR(data_va);
+
+    d3d_log("[D3D BRIDGE]   DrawPrimitiveUP: prims=%u, data=0x%08X, stride=%u\n",
+            prim_count, data_va, g_cur_stream_stride);
+
+    /* Dump vertex data on first draw */
+    {
+        static int _dumped = 0;
+        if (!_dumped && g_cur_stream_stride == 16) {
+            _dumped = 1;
+            float *vf = (float *)data_ptr;
+            uint32_t *vi = (uint32_t *)data_ptr;
+            for (uint32_t i = 0; i < vertex_count; i++) {
+                fprintf(stderr, "  Vert[%u]: pos=(%.2f, %.2f, %.2f) color=0x%08X\n",
+                        i, vf[i*4], vf[i*4+1], vf[i*4+2], vi[i*4+3]);
+            }
+            fflush(stderr);
+        }
+    }
+
+    g_eax = (uint32_t)d3d_call_drawprimitiveup(prim_type, prim_count,
+                                                data_ptr, g_cur_stream_stride);
+}
+
+/**
+ * sub_000AF110 - D3DDevice_Swap / Present
+ * stack[+4..+16] = 4 args (typically all 0)
+ */
+void bridge_Swap(void)
+{
+    g_esp += 4;
+    /* Don't actually present - dashboard_end_frame handles it */
+    g_eax = 0;
+}
+
+/**
+ * Throttle D3D logging after first few frames
+ */
+void d3d_bridge_new_frame(void)
+{
+    g_d3d_bridge_frame++;
+    if (g_d3d_bridge_frame > 3) g_d3d_log_enabled = 0;
+}
+
+/* ── CRT heap bridge ──────────────────────────────────────── */
+
+/**
+ * sub_00055A60 - operator new(size_t)
+ * stack[+4] = size
+ * The CRT heap (RtlAllocateHeap chain) hangs because the heap handle
+ * at 0x12DED0 isn't valid. Bridge to xbox_HeapAlloc instead.
+ */
+void bridge_operator_new(void)
+{
+    uint32_t size = MEM32(g_esp + 4);
+    g_esp += 4; /* pop dummy return */
+
+    if (size == 0) size = 1;
+    uint32_t va = xbox_HeapAlloc(size, 16);
+    if (va) {
+        memset((void *)XBOX_PTR(va), 0, size);
+    }
+    g_eax = va;
+    /* original does POP32 ecx twice + ret to clean 1 arg, but since
+     * callers typically don't clean (cdecl with frame restore), this is fine */
 }
 
 /* Register state and memory offset provided by recomp_types.h */
@@ -480,7 +848,20 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x00052A12) return traced_dashboard_main;
     /* D3D8 method bridges */
     if (xbox_va == 0x000AD8D0) return bridge_SetRenderState;
+    if (xbox_va == 0x000AD820) return bridge_SetRenderState2;
     if (xbox_va == 0x000AF380) return bridge_SetTransform;
+    if (xbox_va == 0x000AF490) return bridge_SetTransform2;
+    if (xbox_va == 0x000AF4C0) return bridge_SetTransform3;
+    if (xbox_va == 0x000ADDC0) return bridge_SetTexture;
+    if (xbox_va == 0x000B0520) return bridge_CreateVertexBuffer;
+    if (xbox_va == 0x000B0580) return bridge_LockVertexBuffer;
+    if (xbox_va == 0x000B14C0) return bridge_SetStreamSource;
+    if (xbox_va == 0x000B1860) return bridge_SetVertexShader;
+    if (xbox_va == 0x000B0B50) return bridge_DrawVertices;
+    if (xbox_va == 0x000AF110) return bridge_Swap;
+
+    /* CRT heap: operator new → xbox_HeapAlloc */
+    if (xbox_va == 0x00055A60) return bridge_operator_new;
 
     /* Fixed memcpy that properly saves/restores esi/edi */
     if (xbox_va == 0x00055E90) return fixed_memcpy;
