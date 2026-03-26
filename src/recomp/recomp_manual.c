@@ -609,8 +609,9 @@ void dashboard_setup_scene(void)
     memset((void *)XBOX_PTR(root_va), 0, 128);
     MEM32(root_va) = root_vtbl_va; /* vtable pointer */
 
-    /* Store at XApp+0x64 */
-    MEM32(0x121EF0 + 0x64) = root_va;
+    /* Store at XApp+0x64 only if not already set by real init */
+    if (!MEM32(0x121EF0 + 0x64))
+        MEM32(0x121EF0 + 0x64) = root_va;
 
     fprintf(stderr, "[SCENE] dev_ctx=0x%08X root=0x%08X\n", dev_ctx_va, root_va);
     fprintf(stderr, "[SCENE] XApp+4C=0x%08X XApp+64=0x%08X\n",
