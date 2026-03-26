@@ -695,6 +695,37 @@ int dashboard_load_xip(const char *path, uint32_t entry_va)
     return 1;
 }
 
+/* ── Vtable thunks (missed by func_id — only called via ICALL) ─── */
+
+extern void sub_0002D97A(void);
+
+/**
+ * 0x0002BEA1 - "find resource" thunk.
+ * Adjusts this pointer: ecx = ecx->field_0x10, then calls sub_0002D97A.
+ * If field_0x10 is NULL, returns 0.
+ */
+static void thunk_0002BEA1(void)
+{
+    g_ecx = MEM32(g_ecx + 0x10);
+    if (!g_ecx) {
+        g_eax = 0;
+        g_esp += 4; /* pop dummy return */
+        return;
+    }
+    /* tail call to real method */
+    sub_0002D97A();
+}
+
+/**
+ * 0x0002E6EE - "get scene manager" getter thunk.
+ * Returns this->field_0x44.
+ */
+static void thunk_0002E6EE(void)
+{
+    g_eax = MEM32(g_ecx + 0x44);
+    g_esp += 4; /* pop dummy return */
+}
+
 /* Register state and memory offset provided by recomp_types.h */
 
 /* ── Manual function overrides ─────────────────────────────── */
@@ -1080,6 +1111,10 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     /* Minimal scene graph methods */
     if (xbox_va == VA_SCENE_NOOP)   return scene_noop;
     if (xbox_va == VA_SCENE_RENDER) return scene_render;
+
+    /* Vtable thunks (missed by func_id — only called via ICALL) */
+    if (xbox_va == 0x0002BEA1) return thunk_0002BEA1;
+    if (xbox_va == 0x0002E6EE) return thunk_0002E6EE;
 
     /* CRT heap: operator new → xbox_HeapAlloc */
     if (xbox_va == 0x00055A60) return bridge_operator_new;
