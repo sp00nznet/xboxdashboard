@@ -695,9 +695,105 @@ int dashboard_load_xip(const char *path, uint32_t entry_va)
     return 1;
 }
 
+/* ── Resource lookup interceptor ───────────────────────────────── */
+
+/* Xbox VA of the XAP resource descriptor (allocated on first use) */
+static uint32_t g_xap_resource_va = 0;
+
+/**
+ * Intercept sub_0003142A - the resource find function.
+ * When the URL is "default.xap", return the XAP text from the loaded XIP
+ * directly, bypassing the broken resource lookup chain.
+ *
+ * sub_0003142A(ecx=parser_ctx, stack: URL_string, URL_len, output_ptr)
+ * Returns: pointer to resource data (or 0 on failure)
+ */
+void intercept_find_resource(void)
+{
+    uint32_t url_va = MEM32(g_esp + 4);    /* URL string (wide) */
+    uint32_t url_len = MEM32(g_esp + 8);   /* URL length in chars */
+    uint32_t out_va = MEM32(g_esp + 12);   /* output pointer */
+
+    /* Convert wide URL to ASCII for comparison */
+    char url_ascii[64] = {0};
+    uint16_t *url_wide = (uint16_t *)XBOX_PTR(url_va);
+    for (int i = 0; i < 63 && i < (int)url_len; i++)
+        url_ascii[i] = (char)url_wide[i];
+
+    fprintf(stderr, "[FIND] intercept_find_resource: url=\"%s\" len=%u\n",
+            url_ascii, url_len);
+    fflush(stderr);
+
+    /* Check if this is the main scene URL */
+    if (url_len >= 7 && url_ascii[0] == 'd' && url_ascii[7] == '.' ) {
+        /* "default.xap" — return the XAP text from loaded XIP */
+        if (!g_xap_resource_va) {
+            /* The XIP data is at XIP entry +0x0C.
+             * XIP header: 16 bytes, then resource table (16 entries * 16 bytes = 256),
+             * then string table (~208 bytes). XAP text starts after strings.
+             * First resource entry: offset=0, size=0xA128.
+             * String table ends around offset 0x21A. */
+            uint32_t xip_data = MEM32(0x124860 + 0x0C);  /* XIP file data in heap */
+            if (!xip_data) {
+                fprintf(stderr, "[FIND] XIP data not loaded!\n"); fflush(stderr);
+                g_eax = 0;
+                g_esp += 4; return;
+            }
+
+            /* Find the XAP text: scan for "DEF " signature after the header */
+            uint8_t *data = (uint8_t *)XBOX_PTR(xip_data);
+            uint32_t xap_offset = 0;
+            for (uint32_t i = 0x100; i < 0x300; i++) {
+                if (data[i] == 'D' && data[i+1] == 'E' && data[i+2] == 'F' && data[i+3] == ' ') {
+                    xap_offset = i;
+                    break;
+                }
+            }
+            if (!xap_offset) {
+                /* Try null-terminated string scan */
+                xap_offset = 0x21A; /* known offset from hex analysis */
+            }
+
+            uint32_t xap_size = 0xA128; /* first resource size from XIP header */
+
+            /* Create resource descriptor: type=0xD at +0x08, data at +0x18 */
+            uint32_t desc_size = 0x18 + xap_size + 4;
+            g_xap_resource_va = xbox_HeapAlloc(desc_size, 16);
+            if (g_xap_resource_va) {
+                memset((void *)XBOX_PTR(g_xap_resource_va), 0, 0x18);
+                MEM32(g_xap_resource_va + 0x08) = 0xD; /* type: scene data */
+                /* Copy XAP text to descriptor+0x18 */
+                memcpy((void *)XBOX_PTR(g_xap_resource_va + 0x18),
+                       data + xap_offset, xap_size);
+                /* Null-terminate */
+                MEM8(g_xap_resource_va + 0x18 + xap_size) = 0;
+
+                fprintf(stderr, "[FIND] Created XAP resource: desc=0x%08X, "
+                        "text at +0x18, size=%u, offset=0x%X\n",
+                        g_xap_resource_va, xap_size, xap_offset);
+                fflush(stderr);
+            }
+        }
+
+        if (g_xap_resource_va) {
+            /* Store provider in output */
+            if (out_va) MEM32(out_va) = MEM32(g_ecx + 0x1AC);
+            g_eax = g_xap_resource_va + 0x18; /* return pointer to text data */
+            g_esp += 4; return;
+        }
+    }
+
+    /* For other URLs, call the original function */
+    {
+        extern void sub_0003142A(void);
+        sub_0003142A();
+    }
+}
+
 /* ── Vtable thunks (missed by func_id — only called via ICALL) ─── */
 
 extern void sub_0002D97A(void);
+extern void sub_00031DDE(void);
 
 /**
  * 0x0002BEA1 - "find resource" thunk.
@@ -714,6 +810,75 @@ static void thunk_0002BEA1(void)
     }
     /* tail call to real method */
     sub_0002D97A();
+}
+
+/**
+ * 0x00032492 - XAP parser loop body.
+ * Called from sub_000324A5 when flag at esi+0x1B4 is 0.
+ * Loops: clear local, call sub_00031DDE (text parser), repeat while flag==0.
+ *
+ * Original x86:
+ *   and [ebp-4], 0         ; clear parse result
+ *   lea eax, [ebp-4]
+ *   push eax               ; &result
+ *   mov ecx, esi           ; parser context
+ *   call sub_00031DDE       ; PARSE ONE NODE
+ *   test al, al
+ *   je done                 ; if failed, stop
+ *   cmp [esi+0x1B4], 0
+ *   je loop_back            ; if flag still 0, parse next
+ */
+void thunk_00032492(void)
+{
+    uint32_t ebp = g_seh_ebp;
+    int parse_count = 0;
+
+    fprintf(stderr, "[XAP PARSE] ctx(esi)=0x%08X +0x0C=0x%08X +0x1A8=0x%08X +0x1AC=0x%08X\n",
+            g_esi, MEM32(g_esi + 0x0C), MEM32(g_esi + 0x1A8), MEM32(g_esi + 0x1AC));
+    fflush(stderr);
+    /* Fix parser context fields:
+     * +0x1A8: data source (sub_00032480 set from +0x10 which was 0)
+     * +0x1AC: resource provider (should be scene_root, was lost) */
+    if (MEM32(g_esi + 0x0C)) {
+        MEM32(g_esi + 0x1A8) = MEM32(g_esi + 0x0C); /* XAP text pointer */
+        MEM32(g_esi + 0x1AC) = MEM32(0x121EF0 + 0x64); /* scene root as provider */
+        MEM32(g_esi + 0x1B0) = MEM32(g_esi + 0x1AC);   /* same */
+        fprintf(stderr, "[XAP PARSE] Fixed: +0x1A8=0x%08X +0x1AC=0x%08X\n",
+                MEM32(g_esi + 0x1A8), MEM32(g_esi + 0x1AC));
+        fflush(stderr);
+    }
+    /* Dump first bytes at data source */
+    {
+        uint32_t src = MEM32(g_esi + 0x1A8);
+        if (src) {
+            char *p = (char *)XBOX_PTR(src);
+            fprintf(stderr, "[XAP PARSE] Data at 0x%08X: \"%.60s\"\n", src, p);
+        }
+    }
+    fprintf(stderr, "[XAP PARSE] Starting parse loop...\n"); fflush(stderr);
+
+    do {
+        MEM32(ebp - 4) = 0;  /* clear parse result */
+        uint32_t result_va = ebp - 4;
+        PUSH32(g_esp, result_va);
+        g_ecx = g_esi;  /* parser context */
+        PUSH32(g_esp, 0);
+        sub_00031DDE();  /* PARSE ONE NODE! */
+
+        parse_count++;
+        if (parse_count <= 10 || parse_count % 100 == 0) {
+            fprintf(stderr, "[XAP PARSE] node %d: al=%u\n", parse_count, LO8(g_eax));
+            fflush(stderr);
+        }
+
+        if (!LO8(g_eax)) break;  /* parse failed = done */
+
+    } while (MEM8(g_esi + 0x1B4) == 0);
+
+    fprintf(stderr, "[XAP PARSE] Done: %d nodes parsed\n", parse_count); fflush(stderr);
+
+    /* Return to caller (sub_000324A5 → sub_00032480 → sub_0003253A) */
+    g_eax = 0;
 }
 
 /**
@@ -1115,6 +1280,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     /* Vtable thunks (missed by func_id — only called via ICALL) */
     if (xbox_va == 0x0002BEA1) return thunk_0002BEA1;
     if (xbox_va == 0x0002E6EE) return thunk_0002E6EE;
+    if (xbox_va == 0x00032492) return thunk_00032492;
+    /* Resource lookup interceptor */
+    if (xbox_va == 0x0003142A) return intercept_find_resource;
 
     /* CRT heap: operator new → xbox_HeapAlloc */
     if (xbox_va == 0x00055A60) return bridge_operator_new;
