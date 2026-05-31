@@ -122,8 +122,10 @@ Starting dashboard...
     [4] Random seed -> OK
     [5] Display config -> OK
     [6] Settings/EEPROM -> OK (NtReadFile, ExQueryPoolBlockSize)
-    [7] App init (sub_00029D34) -> FAILS (needs D3D8 device with vtable)
-  Cleanup -> DPC dispatch -> HalReturnToFirmware (stubbed)
+    [7] App init (sub_00029D34) -> OK (scene manager + real scene root created)
+    [8] XIP/asset load (sub_0003534B) -> real loader opens Y:\default.xip
+    [12/13] Scene setup (sub_00029832 / sub_0002E891) -> scene root + manager wired
+  Render: green orb (Xbox logo sphere) on black @60fps via D3D8->D3D11 bridges
 ```
 
 **44+ kernel calls executing correctly** including:
@@ -133,7 +135,9 @@ Starting dashboard...
 - `ExAllocatePoolWithTag`, `ExFreePool` (heap management)
 - NV2A MMIO hook active for GPU register access at 0xFD000000
 
-**WINDOW RENDERING AT 33 FPS:** A 640x480 window displays with D3D11 swap chain via the xboxrecomp D3D8-to-D3D11 translation layer. The main loop runs tick+render continuously. D3D bridge functions route SetRenderState (171 call sites) and SetTransform (30 call sites) to the real D3D11 backend. Clear+Present runs each frame. Next: bridge remaining D3D methods (BeginScene, EndScene, DrawPrimitive, CreateTexture) and load XIP archives for dashboard UI assets.
+**RENDERING AT 60 FPS:** A 640x480 D3D11 window presents the dashboard's green orb on a black background via the xboxrecomp D3D8→D3D11 layer (12 bridges: SetRenderState/SetTransform/SetTexture/CreateVertexBuffer/DrawVertices/Swap/…). The full XApp init chain runs, and the scene manager + real scene root are created.
+
+**Current focus — the XAP/XIP scene engine (Phase 4.5 above):** the dashboard's own XIP loader now opens `Y:\default.xip` and the real load path executes. The remaining work is the dashboard's text→bytecode **compile → VM → reflection** pipeline that turns the VRML/JS scene source into the live scene graph. Reverse-engineered with Ghidra (symbol recovery) and headless IDA Pro (Hex-Rays). See `docs/GEN_PATCHES.md` for the runtime fixes that brought the loader online.
 
 ## Building
 
