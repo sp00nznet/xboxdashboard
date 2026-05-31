@@ -37,6 +37,15 @@ Desktop.ini
 
 # Archives
 *.7z
+*.zip
 *.iso
 *.qcow2
 *.raw
+
+# Debug / run artifacts (stderr captures, kernel logs, unresolved dumps)
+*.log
+*.out
+run_*.log
+run_*.out
+unresolved*.txt
+d3d_log.txt

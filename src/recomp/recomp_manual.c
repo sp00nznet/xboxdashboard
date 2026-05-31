@@ -740,21 +740,30 @@ void intercept_find_resource(void)
                 g_esp += 4; return;
             }
 
-            /* Find the XAP text: scan for "DEF " signature after the header */
+            /* Resource 0 is at data_base + entry[0].offset.
+             * data_base = header(16) + entries(num*16) + string_table.
+             * Parse the XIP to find data_base: */
             uint8_t *data = (uint8_t *)XBOX_PTR(xip_data);
-            uint32_t xap_offset = 0;
-            for (uint32_t i = 0x100; i < 0x300; i++) {
-                if (data[i] == 'D' && data[i+1] == 'E' && data[i+2] == 'F' && data[i+3] == ' ') {
-                    xap_offset = i;
-                    break;
-                }
+            uint16_t num_ents = *(uint16_t *)(data + 8);
+            uint32_t str_start = 16 + num_ents * 16;
+            /* Scan past string table (null-terminated names) */
+            uint32_t str_end = str_start;
+            for (uint16_t i = 0; i < num_ents; i++) {
+                while (str_end < str_start + 1024 && data[str_end] != 0) str_end++;
+                str_end++; /* skip null */
             }
-            if (!xap_offset) {
-                /* Try null-terminated string scan */
-                xap_offset = 0x21A; /* known offset from hex analysis */
-            }
+            uint32_t data_base = str_end;
+            /* Resource 0: offset from entry table */
+            uint32_t res0_offset = *(uint32_t *)(data + 16); /* entry[0].offset */
+            uint32_t xap_offset = data_base + res0_offset;
+            uint32_t xap_size = *(uint32_t *)(data + 20); /* entry[0].size */
 
-            uint32_t xap_size = 0xA128; /* first resource size from XIP header */
+            fprintf(stderr, "[FIND] XIP: data_base=0x%X, res0_off=0x%X, abs=0x%X, size=%u\n",
+                    data_base, res0_offset, xap_offset, xap_size);
+            fprintf(stderr, "[FIND] First 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                    data[xap_offset], data[xap_offset+1], data[xap_offset+2], data[xap_offset+3],
+                    data[xap_offset+4], data[xap_offset+5], data[xap_offset+6], data[xap_offset+7]);
+            fflush(stderr);
 
             /* Create resource descriptor: type=0xD at +0x08, data at +0x18 */
             uint32_t desc_size = 0x18 + xap_size + 4;
@@ -765,8 +774,11 @@ void intercept_find_resource(void)
                 /* Copy XAP text to descriptor+0x18 */
                 memcpy((void *)XBOX_PTR(g_xap_resource_va + 0x18),
                        data + xap_offset, xap_size);
-                /* Null-terminate */
+                /* Add terminator: byte 0x00 tells the parser to stop */
                 MEM8(g_xap_resource_va + 0x18 + xap_size) = 0;
+                MEM8(g_xap_resource_va + 0x18 + xap_size + 1) = 0;
+                MEM8(g_xap_resource_va + 0x18 + xap_size + 2) = 0;
+                MEM8(g_xap_resource_va + 0x18 + xap_size + 3) = 0;
 
                 fprintf(stderr, "[FIND] Created XAP resource: desc=0x%08X, "
                         "text at +0x18, size=%u, offset=0x%X\n",
@@ -872,6 +884,10 @@ void thunk_00032492(void)
         }
 
         if (!LO8(g_eax)) break;  /* parse failed = done */
+        if (parse_count > 50000) {
+            fprintf(stderr, "[XAP PARSE] Safety limit reached!\n"); fflush(stderr);
+            break;
+        }
 
     } while (MEM8(g_esi + 0x1B4) == 0);
 

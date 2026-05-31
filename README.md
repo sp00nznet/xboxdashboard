@@ -16,8 +16,39 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 6,323 functions, 134 kernel imports |
 | 2 | Lift to C & first build | DONE - 628K lines of C, ~6MB native exe |
 | 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - 50+ kernel calls, full init chain |
-| 4 | UI rendering (D3D8 init, 3D orb, fonts) | IN PROGRESS - **Main loop running** (2M+ frames/sec) |
+| 4 | UI rendering (D3D8 init, 3D orb, fonts) | DONE - green orb @ 60fps, 12 D3D8→D3D11 bridges |
+| 4.5 | XAP/XIP scene engine bring-up | IN PROGRESS - engine fully mapped; real XIP loader now runs (see below) |
 | 5 | Polish (input, audio, settings) | Pending |
+
+### Phase 4.5 — XAP/XIP scene engine (current focus)
+
+The dashboard UI is driven by **`default.xip`**, which contains the scene as **VRML97-style
+text** (`DEF theScreen Screen { ... }`) plus **JavaScript** behaviour scripts. The dashboard
+is effectively a small **VRML + ECMAScript engine**: text is compiled to a **stack-machine
+bytecode** which a VM (`sub_00031DDE`) executes against a **node-class reflection registry**
+(C-prefixed classes `CScreenSaver`/`CTextNode`/`CLevel`/… with `{name, member-offset, type}`
+field tables) to build the scene graph. This is far more than a "XAP parser" and has no analog
+in the sibling recomp projects.
+
+Reverse-engineered with **Ghidra** (FidDb name recovery) and **headless IDA Pro 9.1**
+(Hex-Rays). Real load path: `sub_0003534B` (XIP load) → worker/sync → `sub_00035176` (opens
+`y:\default.xip`, reads header/entry-table/string-table/data, `sub_0003503E` processes
+resources by type) → resource provider → compiler → bytecode VM → reflection → render.
+
+**Fixes landed this phase** (see `docs/GEN_PATCHES.md` for the gitignored gen-file patches):
+- **`Y:` drive mapping** — the dashboard opens `y:\default.xip`; the kernel path layer had no
+  `Y:` rule. Added `Y:\ → game/` (xboxrecomp `kernel_path.c`).
+- **CRT allocator redirect** — the CRT heap (handle `0x12DED0`) is invalid; `nh_malloc`
+  (the funnel for `malloc`/`operator new`) now routes to the working `xbox_HeapAlloc`, so the
+  real loader's allocations (e.g. the filename buffer) are valid for both direct and indirect calls.
+- **Forced synchronous XIP load** — the loader was running on a `PsCreateSystemThreadEx`
+  worker thread whose simulated stack corrupts FPO stack-locals; forcing the sync/main-thread
+  path (which the original takes) fixed that class of corruption.
+
+**Current blocker:** a runtime ESP/frame desync deep in the FPO call chain
+(`sub_00035176 → sub_0002A90B → sub_2A66D`) yields an empty filename to `CreateFile`. The
+recompiler's *output is verified correct* (regen is byte-identical), so this is a runtime
+simulation issue to debug — not a codegen one.
 
 ## What's Inside the Dashboard
 
@@ -153,6 +184,10 @@ The executable expects the original dashboard files in the `game/` subdirectory.
 - **D3D8 window** - 640x480 window with D3D11 swap chain, presenting at ~33 FPS with VSync
 - **D3D bridges** - SetRenderState and SetTransform routed to D3D8-to-D3D11 layer
 - **Main loop** - Dashboard tick+render loop running continuously with frame presentation
+- **Scene graph** - Green orb drawing via ICALL dispatch; real scene root + scene manager created
+- **Symbol recovery** - Ghidra FidDb pass recovered 133 CRT/XDK names (incl. LZX/XIP decompressors); applied to the recompiled C
+- **XAP/XIP engine mapped** - identified as a VRML97 + JavaScript engine: text→bytecode compiler + stack-machine VM (`sub_00031DDE`) + node-class reflection registry (via headless IDA Pro Hex-Rays)
+- **Real XIP loader running** - `Y:` drive mapping + CRT-heap allocator redirect + forced-sync load bring the dashboard's *own* `sub_0003534B`→`sub_00035176` load path online (replacing the hand-rolled loader)
 
 ## How It Works
 
