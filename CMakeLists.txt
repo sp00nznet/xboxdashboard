@@ -72,13 +72,24 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /bigobj /w)
+    # /Zi even in Release. Every generated function is a real symbol
+    # (sub_000B2630 and so on), so with a .pdb beside the .exe the fault
+    # handler resolves a bare host RIP back to the guest function that
+    # faulted -- which is the whole question at a crash. Without it the
+    # handler prints an address that changes every build and names nothing.
+    # Costs link time and a large .pdb; it does not change codegen.
+    target_compile_options(${PROJECT_NAME} PRIVATE /bigobj /w /Zi)
     target_link_options(${PROJECT_NAME} PRIVATE
         /LARGEADDRESSAWARE
         # Deep guest call chains run on the host stack.
         /STACK:16777216
         # The guest's addresses are absolute; the image must not move.
         /DYNAMICBASE:NO
+        # Symbols for the fault handler; /OPT:* keep Release folding, which
+        # /DEBUG would otherwise turn off.
+        /DEBUG
+        /OPT:REF
+        /OPT:ICF
     )
 endif()
 

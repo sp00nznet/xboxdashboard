@@ -5,16 +5,18 @@ Windows executable — not emulation. [xboxrecomp](https://github.com/sp00nznet/
 translates its x86 machine code to C, which MSVC compiles against replacement runtime
 libraries (Xbox kernel → Win32, D3D8 → D3D11, NV2A, DirectSound).
 
-> ### It does not render anything yet.
+> ### It renders one frame, and that frame is black.
 >
-> There is no picture. The window is black, and that is the honest state of the project.
+> The dashboard boots, runs its full init chain, builds its scene graph from its own
+> `default.xip`, loads all 67 of its audio files, **reaches its frame loop**, and calls its own
+> tick and render. Its render builds a real NV2A command stream — 1,465 words, 360 distinct
+> methods, **0 unrecognised** — and clears a 1280x960 surface at `0x00088000` to its own
+> opaque black.
 >
-> What does work: the dashboard boots, runs its full init chain, builds its scene graph from
-> its own `default.xip`, loads all 67 of its audio files, **reaches its frame loop**, and calls
-> its own tick and render. Its render submits NV2A commands, and the first one that arrives
-> decoded is `clear colour 0xFF000000 -> surface 0x00088000` — the dashboard clearing its
-> framebuffer to black. It faults before drawing geometry. Nothing has ever been drawn by the
-> dashboard on the PC.
+> That clear is a real frame. `RECOMP_FB_DUMP` writes it out and every pixel is `000000`,
+> which proves the surface address, pitch and format are right. It is *not* the dashboard
+> drawing its UI: the stream contains **0 draws**, so no geometry has been submitted yet, and
+> nothing in this repo has ever put a pixel on screen that the dashboard did not ask for.
 >
 > An earlier version of this README claimed a "green orb at 60fps". That orb was ours — a
 > hand-written disc drawn by scaffolding in this repo, not by the dashboard. It has been
@@ -33,7 +35,7 @@ Nothing below claims a working UI. Phases 4 and 4.5 are where the project actual
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,873 functions, 134 kernel imports |
 | 2 | Lift to C & first build | DONE - 475K lines of C, ~6MB native exe |
 | 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - full init chain, 424 kernel calls |
-| 4 | UI rendering | IN PROGRESS - frame loop reached; the dashboard's own render submits NV2A commands, nothing on screen yet |
+| 4 | UI rendering | IN PROGRESS - frame loop reached; its own clear renders (1280x960, 0 unrecognised methods), 0 draws yet |
 | 4.5 | XAP/XIP scene engine bring-up | DONE - scene graph built from `default.xip` by the dashboard's own engine |
 | 5 | Polish (input, audio, settings) | Pending |
 
@@ -127,12 +129,30 @@ The first pushbuffer command that decodes is
 `clear colour 0xFF000000 -> surface 0x00088000` — the dashboard clearing its own framebuffer
 to black.
 
-**Current blocker:** the render faults before submitting geometry. Both the render and the
-XIP-loading workers end up dereferencing `0xFF000000`, which is the console's flash ROM
-aperture and is not mapped here — `sub_00034924` reads a digest table at `[that+0x208]` and
-reboots when the compare fails. Whether the dashboard genuinely hashes flash, or that pointer
-is a symptom of something upstream, is the next thing to settle. Six indirect-call targets
-also remain unresolved; the feedback loop above closes those a round at a time.
+- **`0xFF000000` was not mapped, and it is flash ROM.** The MCPX aperture stops one page
+  short of it. The dashboard touches it from two directions — its XIP workers hash 64 KB of
+  it, because it verifies archives against digests, and its render path writes to
+  `0xFF000040` — and both were hard faults that killed the process seconds after the first
+  frame cleared. Mapping it as plain memory, the way the NV2A and MCPX apertures already are,
+  removed **every** fault in the run.
+- **The framebuffer window only ever opened from `AvSetDisplayMode`.** The dashboard clears
+  its first surface before setting a display mode, so `RECOMP_FB_WINDOW=1` was set, the
+  pushbuffer executor knew the address and pitch, and no window appeared. The executor now
+  opens it when a clear proves a surface address is real.
+- **`RECOMP_WATCHDOG_SECS` was silently inert**, because `xbox_WatchdogStart()` is the host's
+  job to call and the project template never did. The one diagnostic that separates a hang
+  from slowness did nothing while appearing to be set.
+- **The Release build had no symbols**, so the fault handler printed a host address that
+  changes every build and named nothing — despite every generated function being a real
+  symbol. `/Zi` and `/DEBUG` are on now.
+
+**Current blocker: the dashboard verifies the console's flash and reboots when it does not
+match.** With flash mapped as zeros there are no faults left, the frame clears, and then
+`sub_00034924` hashes flash, compares against its own digest table, fails, and calls
+`HalReturnToFirmware(4)`. That is the dashboard working correctly — it is a system app
+checking the machine it is running on — so the question is what to give it, not what to fix.
+Separately, the command stream still contains **0 draws**: geometry has not been submitted
+yet, and six indirect-call targets remain unresolved.
 
 ## What's Inside the Dashboard
 
