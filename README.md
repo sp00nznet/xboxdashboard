@@ -9,11 +9,12 @@ libraries (Xbox kernel → Win32, D3D8 → D3D11, NV2A, DirectSound).
 >
 > There is no picture. The window is black, and that is the honest state of the project.
 >
-> What does work: the dashboard boots, runs its full init chain, brings up its *own* D3D8,
-> sizes and allocates its own 640x480 surfaces, submits NV2A commands, opens its own
-> `default.xip` archive, finds `default.xap` inside it by name, and hands the VRML scene text
-> to its own parser. It faults partway through building the scene graph. Nothing has ever
-> been drawn by the dashboard on the PC.
+> What does work: the dashboard boots, runs its full init chain, builds its scene graph from
+> its own `default.xip`, loads all 67 of its audio files, **reaches its frame loop**, and calls
+> its own tick and render. Its render submits NV2A commands, and the first one that arrives
+> decoded is `clear colour 0xFF000000 -> surface 0x00088000` — the dashboard clearing its
+> framebuffer to black. It faults before drawing geometry. Nothing has ever been drawn by the
+> dashboard on the PC.
 >
 > An earlier version of this README claimed a "green orb at 60fps". That orb was ours — a
 > hand-written disc drawn by scaffolding in this repo, not by the dashboard. It has been
@@ -32,8 +33,8 @@ Nothing below claims a working UI. Phases 4 and 4.5 are where the project actual
 | 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,873 functions, 134 kernel imports |
 | 2 | Lift to C & first build | DONE - 475K lines of C, ~6MB native exe |
 | 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - full init chain, 424 kernel calls |
-| 4 | UI rendering | IN PROGRESS - the dashboard's own D3D8 runs and submits a pushbuffer; nothing on screen yet |
-| 4.5 | XAP/XIP scene engine bring-up | IN PROGRESS - `default.xip` opens and streams in through the dashboard's own loader |
+| 4 | UI rendering | IN PROGRESS - frame loop reached; the dashboard's own render submits NV2A commands, nothing on screen yet |
+| 4.5 | XAP/XIP scene engine bring-up | DONE - scene graph built from `default.xip` by the dashboard's own engine |
 | 5 | Polish (input, audio, settings) | Pending |
 
 ### The rule this project runs on
@@ -80,7 +81,6 @@ resource provider → compiler → bytecode VM → reflection → render.
 - **Indirect-call feedback dumps on the firmware-exit path** — that path ends in
   `ExitProcess`, which does not run `atexit`, so a title that gave up during boot never wrote
   the target set that would explain why.
-
 - **An unbridged kernel ordinal was corrupting its caller's stack.** `IoDismountVolumeByName`
   (ordinal 91) had no bridge *and* no entry in the toolkit's stdcall argument table, so the
   generic stub returned 0 and left its one argument on the guest stack. `sub_00032859` then
@@ -95,18 +95,44 @@ resource provider → compiler → bytecode VM → reflection → render.
   itself under its own full filename, so `y:\default.xap` could never match any resource in it
   and the dashboard rebooted rather than showing a UI. `g_df` is now modelled and every string
   instruction steps by `RECOMP_DF_STEP(n)`. Nine sites in the dashboard alone set `std`.
+- **Worker thread stacks were never reclaimed.** The pool counted threads ever created, not
+  threads alive. The dashboard spawns one worker per ambient WAV and terminates it before the
+  next, so after `XBOX_MAX_THREAD_STACKS` files `PsCreateSystemThreadEx` fell back to running
+  the worker *inline* — and that fallback deadlocks rather than slows: the worker finished
+  before its caller reached the wait, so the main thread waited forever on events whose only
+  signaller had already exited. It presented as an audio hang three layers from the cause.
+- **`NtCreateMutant` was routed without `NtReleaseMutant`.** The audio streamer took a mutex
+  per file and could never give it back, so it reopened the same WAV and spawned another
+  worker forever. Routing one half of a lock pair is a deadlock generator.
+- **The pushbuffer survey was reading the wrong memory.** `DMA_PUT` holds a *physical* address
+  — Xbox D3D writes `VA & 0x0FFFFFFF` — and `nv2a_pb_scan` takes guest VAs. Handed the raw
+  register it walked low memory and reported a confident inventory of nothing, so the
+  conclusion "the title submits no methods" was drawn while the dashboard was submitting them
+  the whole time. OR-ing the contiguous window's base is the documented round trip.
+- **`XcSHAInit`/`Update`/`Final` were unbridged**, so every SHA-1 was a no-op. The XIP loader
+  verifies each archive against a 20-byte digest and calls `HalReturnToFirmware(4)` on a
+  mismatch — a no-op hash there does not corrupt anything, it reboots the console.
 
-**Where it gets to now:** `XApp::Init` completes. `default.xip` opens, the archive registers
-itself under `y:`, the name lookup finds `default.xap` at index 0, and the scene text is
-handed to the parser — `sub_0002E891` returns true, and the dashboard no longer returns to
-firmware. It then runs about 3,000 indirect calls into the VRML/JavaScript scene engine before
-faulting inside the text parser (guest `0x00030ED0` / `0x00031468`) with `esp` out of range.
+**Where it gets to now — the frame loop.** `XApp::Init` completes, the scene graph is built
+from `default.xip`, all 67 audio files load across all six categories, and
+`sub_0002A4D4` reaches its loop:
 
-**Current blocker:** the scene engine is vtable dispatch nearly all the way down, and roughly
-29 of its targets are still functions the disassembler has not detected — each unresolved call
-skips a real method. The fix is mechanical, not clever: run, merge `icall_targets.dump` with
-`tools.recomp.icall_feedback`, reseed, regenerate. Each round reaches further and uncovers the
-next layer. Whether the fault survives that is the thing to find out.
+```
+0x2A4ED:  call sub_000297C4   ; tick    <- returns
+          call sub_00029F96   ; render  <- entered, submits NV2A commands
+          jmp  0x2A4ED
+```
+
+The first pushbuffer command that decodes is
+`clear colour 0xFF000000 -> surface 0x00088000` — the dashboard clearing its own framebuffer
+to black.
+
+**Current blocker:** the render faults before submitting geometry. Both the render and the
+XIP-loading workers end up dereferencing `0xFF000000`, which is the console's flash ROM
+aperture and is not mapped here — `sub_00034924` reads a digest table at `[that+0x208]` and
+reboots when the compare fails. Whether the dashboard genuinely hashes flash, or that pointer
+is a symptom of something upstream, is the next thing to settle. Six indirect-call targets
+also remain unresolved; the feedback loop above closes those a round at a time.
 
 ## What's Inside the Dashboard
 
