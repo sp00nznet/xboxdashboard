@@ -208,6 +208,19 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
                 }
             }
         }
+
+        /* Write the indirect-branch targets before the process dies. A crash
+         * mid-scene-build is exactly the run whose vtable targets are worth
+         * feeding back into the next disassembly -- and it never reaches
+         * either atexit or HalReturnToFirmware. Once, because the handler can
+         * fire repeatedly and the set is cumulative anyway. */
+        {
+            static int dumped;
+            if (!dumped) {
+                dumped = 1;
+                RECOMP_ICALL_FEEDBACK_DUMP();
+            }
+        }
         fflush(stderr);
     }
 

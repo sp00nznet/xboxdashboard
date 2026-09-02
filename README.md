@@ -10,9 +10,10 @@ libraries (Xbox kernel → Win32, D3D8 → D3D11, NV2A, DirectSound).
 > There is no picture. The window is black, and that is the honest state of the project.
 >
 > What does work: the dashboard boots, runs its full init chain, brings up its *own* D3D8,
-> sizes and allocates its own 640x480 surfaces, submits NV2A commands, and reads its own
-> `default.xip` scene archive off disk. It then fails to build a scene from it and returns to
-> firmware. Nothing has ever been drawn by the dashboard on the PC.
+> sizes and allocates its own 640x480 surfaces, submits NV2A commands, opens its own
+> `default.xip` archive, finds `default.xap` inside it by name, and hands the VRML scene text
+> to its own parser. It faults partway through building the scene graph. Nothing has ever
+> been drawn by the dashboard on the PC.
 >
 > An earlier version of this README claimed a "green orb at 60fps". That orb was ours — a
 > hand-written disc drawn by scaffolding in this repo, not by the dashboard. It has been
@@ -80,12 +81,32 @@ resource provider → compiler → bytecode VM → reflection → render.
   `ExitProcess`, which does not run `atexit`, so a title that gave up during boot never wrote
   the target set that would explain why.
 
-**Current blocker:** having read `default.xip`, the dashboard probes for a loose
-`default.xap`, does not find one (it lives *inside* the archive), and returns to firmware.
-Three functions in the xapp init chain — `sub_0002A40F`, `sub_0002A4D4`, `sub_0002A4FD` —
-return with `ebx` and `edi` changed (caught by `-DRECOMP_ABI_CHECK`), which is the shape of
-bug that silently truncates a caller's loop. Whether that is what breaks the in-archive
-fallback is the next thing to establish.
+- **An unbridged kernel ordinal was corrupting its caller's stack.** `IoDismountVolumeByName`
+  (ordinal 91) had no bridge *and* no entry in the toolkit's stdcall argument table, so the
+  generic stub returned 0 and left its one argument on the guest stack. `sub_00032859` then
+  ran `pop edi; pop esi; pop ebx` four bytes low and returned with its registers rotated —
+  destroying the `XApp` `this` pointer two frames up, so the scene manager was never created.
+  Reported as nothing but `WARNING: no bridge for ordinal 91, returning 0`. The table now
+  covers it, and the warning now says when an ordinal has no argument size.
+- **The lifter ignored the direction flag.** `cld`/`std` lifted to a comment and every string
+  instruction stepped forwards. MSVC's `strrchr` is `std; repne scasb` scanning *backwards*
+  from the terminator, so it ran off the end of the string and returned garbage. The dashboard
+  uses it to split `y:\default.xip` into a mount path; with it broken the archive registered
+  itself under its own full filename, so `y:\default.xap` could never match any resource in it
+  and the dashboard rebooted rather than showing a UI. `g_df` is now modelled and every string
+  instruction steps by `RECOMP_DF_STEP(n)`. Nine sites in the dashboard alone set `std`.
+
+**Where it gets to now:** `XApp::Init` completes. `default.xip` opens, the archive registers
+itself under `y:`, the name lookup finds `default.xap` at index 0, and the scene text is
+handed to the parser — `sub_0002E891` returns true, and the dashboard no longer returns to
+firmware. It then runs about 3,000 indirect calls into the VRML/JavaScript scene engine before
+faulting inside the text parser (guest `0x00030ED0` / `0x00031468`) with `esp` out of range.
+
+**Current blocker:** the scene engine is vtable dispatch nearly all the way down, and roughly
+29 of its targets are still functions the disassembler has not detected — each unresolved call
+skips a real method. The fix is mechanical, not clever: run, merge `icall_targets.dump` with
+`tools.recomp.icall_feedback`, reseed, regenerate. Each round reaches further and uncovers the
+next layer. Whether the fault survives that is the thing to find out.
 
 ## What's Inside the Dashboard
 
