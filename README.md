@@ -1,14 +1,29 @@
 # Xbox Dashboard Recompiled
 
-**The first-ever native PC port of the original Xbox Dashboard.**
+Statically recompiling the original Xbox Dashboard (`xboxdash.xbe`, build 3944) into a native
+Windows executable — not emulation. [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
+translates its x86 machine code to C, which MSVC compiles against replacement runtime
+libraries (Xbox kernel → Win32, D3D8 → D3D11, NV2A, DirectSound).
 
-Remember that green orb? The ambient hum of a spaceship control room? The satisfying *bwoom* when you scrolled through menus? We're bringing it back -- not through emulation, but by statically recompiling the original `xboxdash.xbe` into a native Windows executable.
-
-This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to translate the Xbox Dashboard's x86 machine code into C, then compiles it with MSVC against replacement runtime libraries (D3D8->D3D11, Xbox kernel->Win32, etc.). The result is a standalone `.exe` that runs the original dashboard code natively.
+> ### It does not render anything yet.
+>
+> There is no picture. The window is black, and that is the honest state of the project.
+>
+> What does work: the dashboard boots, runs its full init chain, brings up its *own* D3D8,
+> sizes and allocates its own 640x480 surfaces, submits NV2A commands, and reads its own
+> `default.xip` scene archive off disk. It then fails to build a scene from it and returns to
+> firmware. Nothing has ever been drawn by the dashboard on the PC.
+>
+> An earlier version of this README claimed a "green orb at 60fps". That orb was ours — a
+> hand-written disc drawn by scaffolding in this repo, not by the dashboard. It has been
+> deleted, along with the fake scene root, hand-rolled asset loader and 2,204 return-zero
+> stubs that surrounded it. Treat any screenshot from before 2026-09-02 as retired.
 
 ## Status
 
 **Target:** Dashboard build 3944 (v1.0 - the one that shipped with launch consoles)
+
+Nothing below claims a working UI. Phases 4 and 4.5 are where the project actually is.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
