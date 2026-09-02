@@ -49,3 +49,5 @@ run_*.log
 run_*.out
 unresolved*.txt
 d3d_log.txt
+src/recomp/gen_*/
+icall_targets.dump

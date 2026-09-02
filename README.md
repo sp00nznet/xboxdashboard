@@ -13,14 +13,29 @@ This project uses [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) to trans
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Project setup & XBE extraction | DONE |
-| 1 | XBE analysis (parse, disasm, func_id) | DONE - 6,323 functions, 134 kernel imports |
-| 2 | Lift to C & first build | DONE - 628K lines of C, ~6MB native exe |
-| 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - 50+ kernel calls, full init chain |
-| 4 | UI rendering (D3D8 init, 3D orb, fonts) | DONE - green orb @ 60fps, 12 D3D8→D3D11 bridges |
-| 4.5 | XAP/XIP scene engine bring-up | IN PROGRESS - engine fully mapped; real XIP loader now runs (see below) |
+| 1 | XBE analysis (parse, disasm, func_id) | DONE - 3,873 functions, 134 kernel imports |
+| 2 | Lift to C & first build | DONE - 475K lines of C, ~6MB native exe |
+| 3 | Dashboard runtime (paths, EEPROM, stubs) | DONE - full init chain, 424 kernel calls |
+| 4 | UI rendering | IN PROGRESS - the dashboard's own D3D8 runs and submits a pushbuffer; nothing on screen yet |
+| 4.5 | XAP/XIP scene engine bring-up | IN PROGRESS - `default.xip` opens and streams in through the dashboard's own loader |
 | 5 | Polish (input, audio, settings) | Pending |
 
-### Phase 4.5 — XAP/XIP scene engine (current focus)
+### The rule this project runs on
+
+**The dashboard drives the rendering; the toolkit provides the framebuffer.** Nothing here
+draws content the dashboard did not ask for. Until 2026-09-02 that rule was broken: the
+"green orb at 60fps" in earlier versions of this README was *our* 24-segment disc, drawn by a
+hand-written `scene_render()` hooked onto a fabricated scene root, next to a hand-rolled XIP
+parser and a fake `Direct3DCreate` — the same scaffolding trap the Burnout 3 bring-up had to
+back out of. All of it is deleted. `src/recomp/recomp_manual.c` now holds no overrides at all.
+
+What replaces it is the toolkit's observation path: the dashboard's own statically-linked
+D3D8 (262 recompiled functions in the `D3D` section) builds an NV2A pushbuffer in guest RAM,
+and `RECOMP_PB_SCAN` / `RECOMP_PB_EXEC` / `RECOMP_FB_WINDOW` survey it, execute what can be
+executed honestly, and put the guest's own framebuffer on screen. A black window is then a
+fact about the dashboard, not about our renderer.
+
+### Phase 4.5 — XAP/XIP scene engine
 
 The dashboard UI is driven by **`default.xip`**, which contains the scene as **VRML97-style
 text** (`DEF theScreen Screen { ... }`) plus **JavaScript** behaviour scripts. The dashboard
@@ -31,24 +46,31 @@ field tables) to build the scene graph. This is far more than a "XAP parser" and
 in the sibling recomp projects.
 
 Reverse-engineered with **Ghidra** (FidDb name recovery) and **headless IDA Pro 9.1**
-(Hex-Rays). Real load path: `sub_0003534B` (XIP load) → worker/sync → `sub_00035176` (opens
-`y:\default.xip`, reads header/entry-table/string-table/data, `sub_0003503E` processes
-resources by type) → resource provider → compiler → bytecode VM → reflection → render.
+(Hex-Rays). Real load path: `sub_0003534B` (XIP load) → `sub_00035176` (opens the archive,
+reads header/entry-table/string-table/data, `sub_0003503E` processes resources by type) →
+resource provider → compiler → bytecode VM → reflection → render.
 
-**Fixes landed this phase** (see `docs/GEN_PATCHES.md` for the gitignored gen-file patches):
-- **`Y:` drive mapping** — the dashboard opens `y:\default.xip`; the kernel path layer had no
-  `Y:` rule. Added `Y:\ → game/` (xboxrecomp `kernel_path.c`).
-- **CRT allocator redirect** — the CRT heap (handle `0x12DED0`) is invalid; `nh_malloc`
-  (the funnel for `malloc`/`operator new`) now routes to the working `xbox_HeapAlloc`, so the
-  real loader's allocations (e.g. the filename buffer) are valid for both direct and indirect calls.
-- **Forced synchronous XIP load** — the loader was running on a `PsCreateSystemThreadEx`
-  worker thread whose simulated stack corrupts FPO stack-locals; forcing the sync/main-thread
-  path (which the original takes) fixed that class of corruption.
+**Fixes landed this phase:**
+- **Function detection was truncating `__heap_init`** — seeding `tools.disasm` with
+  `func_id`'s `identified_functions.json` (which the tool's own help recommends) injects
+  addresses that land *inside* already-detected bodies, and the containing function is then
+  cut short at that address. `sub_0005A771` lost its `pop esi; ret`, so the CRT heap was never
+  initialised and every allocation after it was garbage. Seed only from measured
+  indirect-branch targets (`tools.recomp.icall_feedback`), never from the classifier's list.
+- **`\Device\Harddisk0\Partition2\` now maps to the game dir** (xboxrecomp `kernel_path.c`).
+  Partition2 is C:, the system partition, which on a console is where the dashboard's own
+  assets live — it opens them by device path as well as through `Y:`. They were being sent to
+  the save directory. With this, `default.xip` opens and reads.
+- **Indirect-call feedback dumps on the firmware-exit path** — that path ends in
+  `ExitProcess`, which does not run `atexit`, so a title that gave up during boot never wrote
+  the target set that would explain why.
 
-**Current blocker:** a runtime ESP/frame desync deep in the FPO call chain
-(`sub_00035176 → sub_0002A90B → sub_2A66D`) yields an empty filename to `CreateFile`. The
-recompiler's *output is verified correct* (regen is byte-identical), so this is a runtime
-simulation issue to debug — not a codegen one.
+**Current blocker:** having read `default.xip`, the dashboard probes for a loose
+`default.xap`, does not find one (it lives *inside* the archive), and returns to firmware.
+Three functions in the xapp init chain — `sub_0002A40F`, `sub_0002A4D4`, `sub_0002A4FD` —
+return with `ebx` and `edi` changed (caught by `-DRECOMP_ABI_CHECK`), which is the shape of
+bug that silently truncates a caller's loop. Whether that is what breaks the in-archive
+fallback is the next thing to establish.
 
 ## What's Inside the Dashboard
 
@@ -92,52 +114,51 @@ game/
 | Sections | 19 (.text 637KB, D3D, D3DX, XGRPH, DSOUND, WMA, XPP, DOLBY, XIPS, 6 language tables) |
 | Kernel Imports | 134 (32 Nt* file I/O, 25 Ke* threading, 14 Mm* memory, 7 Hal* hardware) |
 | Libraries | D3D8, D3DX8, XGRAPHC, DSOUND, LIBC, LIBCPMT (all XDK 3944) |
-| Functions | 6,323 discovered, 6,258 translated to C (98.97% success) |
-| Generated Code | 628,227 lines of C across 7 source files |
+| Functions | 3,873 discovered, 3,873 translated to C (0 failed) |
+| Generated Code | 474,831 lines of C across 4 source files |
 | Executable | ~6 MB native x86-64 Windows .exe |
+
+The function count went *down* from the 6,323 quoted before 2026-09-02. That earlier figure
+came from a hand-rolled "split-tail" scan that manufactured entry points; most were not
+functions, and 2,204 of them were hand-stubbed to `return 0`. The current number is what the
+disassembler actually finds, plus the vtable targets the title is measured reaching.
 
 ### Current Boot Status
 
+Everything below is the dashboard's own code, running unmodified. No overrides.
+
 ```
-=== Xbox Dashboard - Static Recompilation ===
-Loading XBE... 1,394,036 bytes
-Initializing Xbox memory layout... 19 sections, 27/28 RAM mirrors
-Initializing kernel bridge... 134/134 resolved (62 bridged, 72 stubbed)
-NV2A GPU initialized: VRAM=64MB RAMIN=1024KB
+=== Xbox Dashboard (build 3944) - Static Recompilation ===
+Xbox memory mapped, 19 sections, 27/28 RAM mirrors
+Kernel thunk bridge: 134/134 resolved (89 bridged, 45 stub)
 Starting dashboard...
-  PsCreateSystemThreadEx -> CRT _threadstart -> SEH prolog -> TLS copy
-  _initterm (CRT initializers) -> OK
+  PsCreateSystemThreadEx -> CRT _threadstart -> SEH prolog -> TLS copy -> _initterm
   Dashboard main (sub_00052A12) entered
   D3D/system init (sub_000558D0):
-    Timer/DPC init -> KeSetTimer + DPC dispatch OK
-    NV2A device creation (sub_00053DCE) -> SUCCESS (1MB at 0x00F80000)
+    NV2A device creation (sub_00053DCE) -> OK (1 MB at 0x00F80000)
     D3D device setup (sub_0005387F) -> OK
+  The dashboard's own D3D8 (sub_000B2630):
+    present params -> 640x480, format 7, 1 backbuffer   <- read from its own state
+    surface sizing (sub_000B4070) -> 1280x960 = 0x4B0000, 640x480 = 0x12C000
+    MmAllocateContiguousMemoryEx -> pushbuffer 520 KB, surfaces in contiguous RAM
+    NV2A DMA_PUT advances -> the dashboard is submitting GPU commands
   File system:
-    C:\tdata, C:\tdata\fffe0000, C:\tdata\fffe0000\music -> opened OK
-    XIP archive paths ready (C:\ -> game/)
-  Xapp init chain (7 steps):
-    [1] Heap setup -> OK
-    [2] CRT lock init -> OK
-    [3] File/path init -> OK (NtCreateFile, RtlInitAnsiString)
-    [4] Random seed -> OK
-    [5] Display config -> OK
-    [6] Settings/EEPROM -> OK (NtReadFile, ExQueryPoolBlockSize)
-    [7] App init (sub_00029D34) -> OK (scene manager + real scene root created)
-    [8] XIP/asset load (sub_0003534B) -> real loader opens Y:\default.xip
-    [12/13] Scene setup (sub_00029832 / sub_0002E891) -> scene root + manager wired
-  Render: green orb (Xbox logo sphere) on black @60fps via D3D8->D3D11 bridges
+    partition1\tdata, \tdata\fffe0000, \tdata\fffe0000\music -> opened OK
+    partition2\default.xip -> OPENED, 1.5 MB read in 64 KB chunks
+      ("XIP0" magic, then VRML/JS scene text streaming in)
+  Then: probes for a loose partition2\default.xap, does not find one,
+        and calls HalReturnToFirmware
 ```
 
-**44+ kernel calls executing correctly** including:
-- `NtAllocateVirtualMemory` (1MB GPU memory), `NtCreateFile` (directory creation)
-- `RtlInitAnsiString`, `RtlEnter/LeaveCriticalSection` (CRT locking)
-- `KeSetTimer`, `HalRequestSoftwareInterrupt` (DPC dispatch)
-- `ExAllocatePoolWithTag`, `ExFreePool` (heap management)
-- NV2A MMIO hook active for GPU register access at 0xFD000000
+**424 kernel calls** execute before it gives up, including `NtAllocateVirtualMemory`,
+`MmAllocateContiguousMemoryEx`, `NtCreateFile`/`NtReadFile` (the archive read),
+`RtlEnter/LeaveCriticalSection`, `KeSetTimer` and `HalRequestSoftwareInterrupt`.
 
-**RENDERING AT 60 FPS:** A 640x480 D3D11 window presents the dashboard's green orb on a black background via the xboxrecomp D3D8→D3D11 layer (12 bridges: SetRenderState/SetTransform/SetTexture/CreateVertexBuffer/DrawVertices/Swap/…). The full XApp init chain runs, and the scene manager + real scene root are created.
-
-**Current focus — the XAP/XIP scene engine (Phase 4.5 above):** the dashboard's own XIP loader now opens `Y:\default.xip` and the real load path executes. The remaining work is the dashboard's text→bytecode **compile → VM → reflection** pipeline that turns the VRML/JS scene source into the live scene graph. Reverse-engineered with Ghidra (symbol recovery) and headless IDA Pro (Hex-Rays). See `docs/GEN_PATCHES.md` for the runtime fixes that brought the loader online.
+**Not yet on screen.** The pushbuffer survey reports the surface as unset and no draws, so
+there is nothing for the framebuffer window to show. That is expected while the scene fails
+to load: with no scene graph there is nothing to draw. The framebuffer window
+(`RECOMP_FB_WINDOW=1`) is on so that the moment there *is*, it appears without anyone here
+writing a renderer.
 
 ## Building
 
@@ -164,34 +185,64 @@ cmake -B build -G "Visual Studio 17 2022"
 cmake --build build --config Release
 ```
 
+### Regenerating the recompiled C
+
+From the `xboxrecomp` clone (that is where `tools/` lives):
+
+```bash
+py -3 -m tools.xbe_parser   ../dashboard/game/xboxdash.xbe --json ../dashboard/game/xboxdash_analysis.json
+py -3 -m tools.disasm       ../dashboard/game/xboxdash.xbe --extra-sections XIPS,DOLBY --force \
+                            --seed-functions ../dashboard/icall_seeds.json
+py -3 -m tools.func_id      ../dashboard/game/xboxdash.xbe
+py -3 -m tools.abi_analysis ../dashboard/game/xboxdash.xbe
+py -3 -m tools.recomp       ../dashboard/game/xboxdash.xbe --all --split 1000 \
+                            --gen-dir ../dashboard/src/recomp/gen \
+                            --trace-functions ../dashboard/trace_funcs.json
+```
+
+`icall_seeds.json` holds indirect-branch targets the dashboard was *measured* reaching
+(`tools.recomp.icall_feedback merge <dump>` then `seeds --out ... --xbe ...`, from the
+`icall_targets.dump` a run leaves behind).
+
+**Do not seed from `tools/func_id/output/identified_functions.json`.** The disassembler's own
+help suggests it; it contains addresses inside existing function bodies, and each one
+truncates the function containing it. That is how `__heap_init` lost its epilogue.
+
 ### Running
 
 ```bash
 bin/Release/xboxdash.exe
 ```
 
-The executable expects the original dashboard files in the `game/` subdirectory.
+The executable expects the original dashboard files in the `game/` subdirectory. Useful
+during bring-up:
+
+| Variable | What it gives you |
+|----------|-------------------|
+| `RECOMP_FB_WINDOW=1` | A window on the guest's own framebuffer. Nothing else scans it out |
+| `RECOMP_PB_SCAN=1` | Survey of the pushbuffer the dashboard submits, ranked by what is unimplemented |
+| `RECOMP_PB_EXEC=1` | Executes the surface/clear methods and screen-space geometry from that pushbuffer |
+| `RECOMP_TRACE_ARGS=12` | Stack arguments at each `--trace-functions` entry |
+| `RECOMP_WATCHDOG_SECS=20` | Guest call stack when it stops making progress |
+
+`-DRECOMP_ABI_CHECK` (on by default in `CMakeLists.txt`) makes every call verify the callee
+restored `ebx`/`esi`/`edi` and popped its return address. It costs three compares per call and
+it is how the truncated `__heap_init` was found.
 
 ### Key Milestones So Far
 
 - **FATX extraction** - Wrote custom QCOW2 + FATX filesystem tools to pull dashboard from Xbox HDD image
 - **XBE analysis** - 19 sections, 134 kernel imports, internal codename "xapp" (Xbox Application)
-- **Function recovery** - Recovered 3,087 "split-tail" functions the disassembler missed by scanning for stubbed call targets
-- **CRT thread init** - Hand-translated `_threadstart` to fix `g_seh_ebp` frame pointer sharing between SEH prolog and caller
-- **DPC dispatch** - Implemented `HalRequestSoftwareInterrupt` with deferred procedure call queue, shutdown watchdog timer runs
-- **SEH prolog fix** - Fixed generated `__SEH_prolog` to write back `g_seh_ebp`, plus post-processed 48 call sites
+- **DPC dispatch** - `HalRequestSoftwareInterrupt` with a deferred procedure call queue; the shutdown watchdog timer runs
 - **NV2A device creation** - GPU instance memory (1MB) allocated and initialized, device setup succeeds
-- **CRT memcpy fix** - Replaced broken `sub_00055E90` (had unresolved jump-table targets clobbering esi/edi)
-- **CRT lock table** - Pre-initialized 36 critical section entries to prevent infinite recursion in `_mtinitlocknum`
-- **Full init chain** - All 7 xapp initialization steps execute: heap, locks, files, RNG, display, settings, app init
-- **File system** - `C:\` drive mapped to `game/`, `RtlInitAnsiString` bridge for proper path handling
-- **D3D8 window** - 640x480 window with D3D11 swap chain, presenting at ~33 FPS with VSync
-- **D3D bridges** - SetRenderState and SetTransform routed to D3D8-to-D3D11 layer
-- **Main loop** - Dashboard tick+render loop running continuously with frame presentation
-- **Scene graph** - Green orb drawing via ICALL dispatch; real scene root + scene manager created
-- **Symbol recovery** - Ghidra FidDb pass recovered 133 CRT/XDK names (incl. LZX/XIP decompressors); applied to the recompiled C
+- **CRT lock table** - 36 critical-section entries pre-initialised so `_mtinitlocknum` cannot recurse forever
+- **Full init chain** - all seven xapp initialisation steps execute: heap, locks, files, RNG, display, settings, app init
+- **Symbol recovery** - Ghidra FidDb pass recovered 133 CRT/XDK names (incl. LZX/XIP decompressors)
 - **XAP/XIP engine mapped** - identified as a VRML97 + JavaScript engine: text→bytecode compiler + stack-machine VM (`sub_00031DDE`) + node-class reflection registry (via headless IDA Pro Hex-Rays)
-- **Real XIP loader running** - `Y:` drive mapping + CRT-heap allocator redirect + forced-sync load bring the dashboard's *own* `sub_0003534B`→`sub_00035176` load path online (replacing the hand-rolled loader)
+- **Scaffolding removed (2026-09-02)** - the hand-written orb, fake scene root, hand-rolled XIP parser, fake `Direct3DCreate`, and 2,204 return-zero stubs are gone; `recomp_manual.c` holds no overrides
+- **The CRT heap actually initialises** - found by `-DRECOMP_ABI_CHECK`: `__heap_init` had been truncated by a bad function-detection seed and never ran its epilogue. Every allocator workaround built on top of that is now unnecessary
+- **The dashboard's own D3D8 runs** - it reads its own 640x480 present parameters, sizes its own surfaces, allocates its own pushbuffer, and advances `DMA_PUT`; nothing in this repo tells it what to draw
+- **The dashboard's own loader reads `default.xip`** - 1.5 MB of VRML/JavaScript scene source streamed in through `sub_0003534B` → `sub_00035176`, after mapping partition2 to the game dir
 
 ## How It Works
 
