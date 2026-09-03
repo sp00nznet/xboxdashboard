@@ -353,6 +353,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * dashboard's render spin went a whole session without being named. */
     xbox_WatchdogStart();
 
+
     /* Step 7: Call the recompiled entry point */
     printf("\nStarting game...\n");
     fflush(stdout);

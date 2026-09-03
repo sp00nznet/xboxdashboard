@@ -44,6 +44,7 @@ typedef void (*recomp_func_t)(void);
 /* ── Register state (defined in xbox_memory_layout.c) ──────── */
 
 extern uint32_t g_eax;
+extern RECOMP_TLS uint32_t g_ebx, g_esi, g_edi;
 extern ptrdiff_t g_xbox_mem_offset;
 
 /* ── Manual function overrides ─────────────────────────────── */
@@ -83,16 +84,114 @@ extern ptrdiff_t g_xbox_mem_offset;
  *   }
  */
 
+/* ── XIP block integrity check (sub_00034924) ────────────────
+ *
+ * The dashboard streams every XIP archive through a 64 KB buffered reader
+ * (sub_00034A1B) and hashes each block, comparing the digest against a table
+ * indexed by block number. A mismatch is not an error return -- it calls
+ * HalReturnToFirmware(4), which is the console rebooting itself. This is a
+ * system application checking the machine it is running on.
+ *
+ * The table lives at [this+4] and the block index at [this+0x14]:
+ *
+ *     if (!table)                        reboot
+ *     if (index >= table[0x208])         reboot
+ *     if (memcmp(digest, table+0x20C + index*20, 20))  reboot
+ *
+ * This does NOT skip the check silently. It reports what the check was about
+ * to compare and lets the title continue, because a reboot three threads away
+ * from the render loop is the least informative possible outcome -- it kills
+ * the process mid-frame and says nothing about why. Whether the mismatch is
+ * "the digest table is in flash and we have no BIOS" or "our archive read
+ * returns the wrong bytes" is the thing worth knowing, and those look
+ * identical from a dead process.
+ *
+ * Not scaffolding: this draws nothing and invents no content. It is the same
+ * category as reporting a disc in the tray or an AC'97 codec as ready --
+ * hardware the host does not have, substituted so the title can proceed.
+ *
+ * Named sub_00034924 deliberately. The caller reaches it by a *direct* call,
+ * which the generated code emits as a plain C call to the symbol -- it never
+ * consults recomp_lookup_manual. --exclude-manual scans this file for the
+ * sub_ names it defines and omits those bodies from codegen, so this
+ * definition is the one that links.
+ */
+void sub_00034924(void)
+{
+    uint32_t this_va = g_ecx;
+    uint32_t buf     = MEM32(g_esp + 4);
+    uint32_t len     = MEM32(g_esp + 8);
+    uint32_t table   = MEM32(this_va + 4);
+    uint32_t index   = MEM32(this_va + 0x14);
+    static int reported;
+
+    if (reported < 8) {
+        reported++;
+        fprintf(stderr, "[XIP VERIFY] block %u (%u bytes at 0x%08X): "
+                        "digest table 0x%08X", index, len, buf, table);
+        if (!table) {
+            fprintf(stderr, " -- NULL, would reboot\n");
+        } else {
+            uint32_t count = MEM32(table + 0x208);
+            uint32_t slot  = table + 0x20C + index * 20;
+            int i, all_zero = 1;
+
+            fprintf(stderr, ", %u entries", count);
+            if (index >= count) {
+                fprintf(stderr, " -- index out of range, would reboot\n");
+            } else {
+                fprintf(stderr, "\n    expected ");
+                for (i = 0; i < 20; i++) {
+                    uint8_t b = MEM8(slot + i);
+                    if (b) all_zero = 0;
+                    fprintf(stderr, "%02X", b);
+                }
+                if (all_zero)
+                    fprintf(stderr, "  (all zero -- unset table)");
+                fprintf(stderr, "\n");
+
+                /* And what the title's own digest function makes of the same
+                 * bytes. The table is verifiable from outside -- SHA1 over the
+                 * 4-byte length followed by the block reproduces every entry
+                 * exactly -- so a mismatch here is the guest-side hash being
+                 * wrong, not the archive. Printing both is what tells those
+                 * apart. */
+                {
+                    extern uint32_t xbox_HeapAlloc(uint32_t, uint32_t);
+                    extern void sub_0005F7C1(void);
+                    static uint32_t scratch;
+                    uint32_t s_esp = g_esp, s_ebx = g_ebx,
+                             s_esi = g_esi, s_edi = g_edi;
+
+                    if (!scratch) scratch = xbox_HeapAlloc(32, 16);
+                    if (scratch) {
+                        for (i = 0; i < 20; i++) MEM8(scratch + i) = 0;
+                        PUSH32(g_esp, scratch);
+                        PUSH32(g_esp, len);
+                        PUSH32(g_esp, buf);
+                        PUSH32(g_esp, 0);        /* dummy return address */
+                        sub_0005F7C1();
+                        g_esp = s_esp; g_ebx = s_ebx;
+                        g_esi = s_esi; g_edi = s_edi;
+
+                        fprintf(stderr, "    computed ");
+                        for (i = 0; i < 20; i++)
+                            fprintf(stderr, "%02X", MEM8(scratch + i));
+                        fprintf(stderr, "\n");
+                    }
+                }
+            }
+        }
+        fflush(stderr);
+    }
+
+    /* thiscall, `ret 8`: pop the dummy return address and both stack args. */
+    g_esp += 12;
+    g_eax = 0;
+}
+
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
-    /*
-     * TODO: Add your overrides here. Examples:
-     *
-     * if (xbox_va == 0x00012345) return traced_sub_00012345;
-     * if (xbox_va == 0x00067890) return stub_00067890;
-     * if (xbox_va == 0x000ABCDE) return fixed_sub_000ABCDE;
-     */
-
     (void)xbox_va;
     return (recomp_func_t)0;
 }
