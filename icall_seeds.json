@@ -84,6 +84,12 @@
   "source": "icall-feedback"
  },
  {
+  "start": "0x000307FC",
+  "flags": 2,
+  "seen": "unresolved",
+  "source": "icall-feedback"
+ },
+ {
   "start": "0x00030F26",
   "flags": 2,
   "seen": "unresolved",
@@ -426,6 +432,12 @@
   "source": "icall-feedback"
  },
  {
+  "start": "0x0003F9BE",
+  "flags": 2,
+  "seen": "unresolved",
+  "source": "icall-feedback"
+ },
+ {
   "start": "0x0003FA28",
   "flags": 3,
   "seen": "both",
@@ -447,6 +459,12 @@
   "start": "0x00040D9A",
   "flags": 3,
   "seen": "both",
+  "source": "icall-feedback"
+ },
+ {
+  "start": "0x00041ABF",
+  "flags": 2,
+  "seen": "unresolved",
   "source": "icall-feedback"
  },
  {
@@ -505,6 +523,18 @@
  },
  {
   "start": "0x000451AB",
+  "flags": 2,
+  "seen": "unresolved",
+  "source": "icall-feedback"
+ },
+ {
+  "start": "0x00045A55",
+  "flags": 2,
+  "seen": "unresolved",
+  "source": "icall-feedback"
+ },
+ {
+  "start": "0x00045A9E",
   "flags": 2,
   "seen": "unresolved",
   "source": "icall-feedback"
