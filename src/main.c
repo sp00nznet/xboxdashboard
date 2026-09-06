@@ -353,6 +353,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * dashboard's render spin went a whole session without being named. */
     xbox_WatchdogStart();
 
+    /* The GPU fence D3D waits on, found the way hl2-recomp found its own.
+     *
+     * D3DDevice_Swap ends in sub_000B3420, which waits until the GPU has
+     * consumed enough of the pushbuffer to release the space it wants:
+     *
+     *     mov eax, [edi+0x3f0]   ; edi = the D3D context at 0x000BBFC0
+     *     mov ecx, [eax]         ;   *(+0x3F0) = what the GPU has consumed
+     *     mov eax, [edi+0x1c]    ;   +0x1C    = what we have submitted
+     *     ...
+     *     jae done               ; otherwise keep waiting
+     *
+     * That is the same shape as Half-Life 2's spin in sub_00612430, which
+     * waits on `[esi+0x2c]` against `*[esi+0x30]` -- a fence in the contiguous
+     * block the device points at, which on hardware the GPU writes as it
+     * drains the pushbuffer. Nothing here executes the pushbuffer, so
+     * everything submitted is complete, and advancing the fence is the same
+     * honest acknowledgement the NV2A register tables already make.
+     *
+     * 0x000BEB50 is the global holding the context pointer (D3D stores
+     * 0x000BBFC0 there during init). The chain is followed and bounds-checked
+     * fresh on every poll, so registering it before D3D exists is harmless. */
+    xbox_Nv2aMirrorFence(0x000BEB50u, 0x1Cu, 0x3F0u);
+
 
     /* Step 7: Call the recompiled entry point */
     printf("\nStarting game...\n");
