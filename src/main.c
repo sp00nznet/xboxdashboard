@@ -378,6 +378,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
      * fresh on every poll, so registering it before D3D exists is harmless. */
     xbox_Nv2aMirrorFence(0x000BEB50u, 0x1Cu, 0x3F0u);
 
+    /* The swap throttle, which is the other half of the same idea.
+     *
+     * D3DDevice_Swap will not start a third frame while two are outstanding.
+     * At 0x000AF121 it reads frames-completed from +0x2518 and frames-
+     * submitted from +0x2B60, and while submitted - completed >= 2 it sits on
+     * the 400-iteration delay loop at sub_000B30A0. Nothing moved +0x2518, so
+     * after two frames it stayed there: 99.8 million calls into that delay
+     * against 35 thousand for the next-hottest function in the whole title.
+     *
+     * Completed follows submitted rather than a clock. A free-running counter
+     * (xbox_Nv2aFrameCounter) can pass submitted, and then the unsigned
+     * subtract underflows to about four billion, which is still >= 2 -- the
+     * same hang, arrived at from the other side. Mirroring cannot overshoot.
+     * It is also honest here: the pushbuffer is executed at submit, so the
+     * frame really is finished by the time the title asks.
+     */
+    xbox_Nv2aMirrorCounter(0x000BEB50u, 0x2B60u, 0x2518u);
+
 
     /* Step 7: Call the recompiled entry point */
     printf("\nStarting game...\n");
