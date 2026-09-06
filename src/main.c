@@ -302,31 +302,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /*
      * Dashboard CRT pre-init.
      *
-     * The Xbox CRT keeps a table of critical-section pointers at 0x113318,
-     * 8 bytes per entry, 36 entries. Entry 10 is the lock that guards the
-     * table itself, so _mtinitlocknum recurses forever trying to create it
-     * when the slot is empty. Non-zero values are enough: the recomp's
-     * RtlEnter/LeaveCriticalSection are no-ops.
-     *
      * 0x12D798 is the CRT's TLS slot index for __getptd. BSS should already
      * be zero; write it anyway, since the value decides where every
      * per-thread CRT read lands.
      *
-     * ponytail: both are bring-up pokes from before the toolkit separated
-     * mapped space from RAM. If the dashboard reaches its main loop with
-     * them removed, remove them.
+     * What used to be here as well: 36 fake handles (0xDEAD0000 + i) written
+     * into the CRT's critical-section table at 0x113318, because
+     * _mtinitlocknum recursed forever on an empty slot and any non-zero value
+     * broke the recursion. That was true when RtlEnter/LeaveCriticalSection
+     * were no-ops -- a lock pointer nothing dereferences can be nonsense.
+     *
+     * The runtime implements them for real now, so those pointers stopped
+     * being ignored and started being used: every CRT lock operation was
+     * reading and writing a guest address that is not memory. The note left
+     * here said to drop them once the dashboard reached its main loop with
+     * them gone. It does.
      */
     {
-        volatile uint32_t *lock_table =
-            (volatile uint32_t *)((uintptr_t)0x113318 + g_xbox_mem_offset);
         volatile uint32_t *tls_idx =
             (volatile uint32_t *)((uintptr_t)0x12D798 + g_xbox_mem_offset);
-        int i;
-
-        for (i = 0; i < 36; i++)
-            lock_table[i * 2] = 0xDEAD0000 + i;   /* flags at [i*2+1] stay 0 */
         *tls_idx = 0;
     }
+
+    /* Name the CRT's locks in contention reports. Diagnostic only: the table
+     * is where MSVC keeps its {CRITICAL_SECTION*, refcount} pairs, and an
+     * index into it ("the heap lock") is worth more in a deadlock report than
+     * a bare guest pointer. */
+    xbox_SetCrtLockTable(0x00113318u, 36);
 
     printf("\n=== Initialization complete ===\n");
     printf("Entry point: 0x%08X\n", YOUR_GAME_ENTRY_POINT);
